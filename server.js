@@ -43,6 +43,12 @@ function logRequest(method, pathname) {
   console.log(`${new Date().toISOString()} ${escapeNonPrintable(method)} ${escapeNonPrintable(pathname)}`);
 }
 
+/** Keep a write failure on process.stdout or process.stderr from becoming an unhandled 'error' event, so a consumer that has gone away cannot replace a log line with a stack trace; the handler does nothing, so it adds no exit status to the 0 for a clean shutdown and the 1 for a refusal this program defines () -> void. */
+function ignoreBrokenStdio() {
+  process.stdout.on('error', () => {});
+  process.stderr.on('error', () => {});
+}
+
 /** Write statusCode and body to res with a text/plain Content-Type; the only response writer (res, statusCode, body) -> void. */
 function sendPlainText(res, statusCode, body) {
   res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
@@ -148,6 +154,8 @@ function shutdown(server) {
 
 /** Resolve the port from the environment, create the server and start listening () -> void. */
 function start() {
+  ignoreBrokenStdio();
+
   const resolved = resolvePort(process.env.PORT);
 
   if (!resolved.ok) {
