@@ -38,12 +38,12 @@ function resolvePort(rawValue) {
   return { ok: true, port };
 }
 
-/** Log one line for the given method and pathname, before the request is routed. */
+/** Log one line for the given method and pathname, before the request is routed (method, pathname) -> void. */
 function logRequest(method, pathname) {
   console.log(`${new Date().toISOString()} ${method} ${pathname}`);
 }
 
-/** Write statusCode and body to res with a text/plain Content-Type; the only response writer. */
+/** Write statusCode and body to res with a text/plain Content-Type; the only response writer (res, statusCode, body) -> void. */
 function sendPlainText(res, statusCode, body) {
   res.writeHead(statusCode, { 'Content-Type': 'text/plain' });
   res.end(body);
@@ -93,7 +93,7 @@ function createServer() {
   return server;
 }
 
-/** Report a bind failure on stderr and set exit code 1; the failed port comes from error.port. */
+/** Report a bind failure on stderr and set exit code 1, reading the failed port from error.port (error) -> void. */
 function onServerError(error) {
   if (error.code === 'EADDRINUSE') {
     console.error(`Port ${error.port} is already in use. Stop the process using it or set PORT to a free port.`);
@@ -138,7 +138,7 @@ function shutdown(server) {
   });
 }
 
-/** Resolve the port from the environment, create the server and start listening. */
+/** Resolve the port from the environment, create the server and start listening () -> void. */
 function start() {
   const resolved = resolvePort(process.env.PORT);
 
