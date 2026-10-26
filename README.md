@@ -205,8 +205,8 @@ Literal examples from one session, the first for the request above and the secon
 ```
 
 - The timestamp is `Date.prototype.toISOString()`: UTC, milliseconds, and a `Z` suffix, so it always matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`.
-- The method is the method as received, exactly as sent by the client.
-- The third token is the query-stripped path — the same value the router matches on — so `GET /hello?x=1` logs `2026-10-26T07:56:28.326Z GET /hello`.
+- The method is the method as received, exactly as sent by the client — except that a byte outside printable ASCII is rendered as a `\uXXXX` escape, so the line always stays a single three-token line.
+- The third token is the query-stripped path — the same value the router matches on — so `GET /hello?x=1` logs `2026-10-26T07:56:28.326Z GET /hello`. A byte outside printable ASCII — that is, outside `0x20`-`0x7E` — is rendered as a `\uXXXX` escape rather than the raw byte, so the line always stays three tokens.
 
 Operational output — the startup line, every request line and the shutdown lines — goes to stdout. Diagnostics go to stderr, so the two streams can be separated without parsing prefixes.
 
@@ -371,7 +371,7 @@ With the server in one terminal, issue V2 and V3 from another, then read the ser
 2026-10-26T07:56:28.334Z GET /invalid
 ```
 
-Each line is three space-separated tokens with no literal brackets: the first matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`, the second is exactly the request method, and the third is the query-stripped path, so `GET /hello?x=1` logs `... GET /hello`. The request answered with 404 is logged like any other. To count the lines without writing a file into the repository, start the server with its log outside the repository, drive the requests, stop the server by its pid, and count what it wrote:
+Each line is three space-separated tokens with no literal brackets: the first matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`, the second is exactly the request method, and the third is the query-stripped path, so `GET /hello?x=1` logs `... GET /hello`; a byte outside printable ASCII in either of those two tokens is rendered as a `\uXXXX` escape rather than sent through raw, so each line always stays a single three-token line. The request answered with 404 is logged like any other. To count the lines without writing a file into the repository, start the server with its log outside the repository, drive the requests, stop the server by its pid, and count what it wrote:
 
 ```bash
 # start the server, keeping its log outside the repository, and remember its pid
@@ -582,7 +582,7 @@ package.json
 server.js
 ```
 
-with no `node_modules`, no `package-lock.json`, no test file and no CI file. `node --check server.js` prints nothing, which means the source parses cleanly. The marker grep finds no match: that check is scoped to `server.js`, the only code file, and this README contains those marker words only inside this command, as its search pattern. The last command prints
+with no `node_modules`, no `package-lock.json`, no test file and no CI file. `node --check server.js` prints nothing, which means the source parses cleanly. The marker grep finds no match: that check is scoped to `server.js`, the only code file. Every marker word this README carries sits inside one of its documented examples rather than in code — the V16 search pattern, the escape notation the Request logging section and V5 describe for a byte outside printable ASCII, and the `mktemp` template in V5. The last command prints
 
 ```
 1
