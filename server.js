@@ -6,6 +6,11 @@ const DEFAULT_PORT = 3000;
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 
+/** Escape every character outside printable ASCII in value, so a refusal message stays one log line; returns the escaped string. */
+function escapeNonPrintable(value) {
+  return value.replace(/[^\u0020-\u007E]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+}
+
 /** Resolve rawValue into a validated port, or a message explaining the refusal. */
 function resolvePort(rawValue) {
   if (rawValue === undefined || rawValue.trim() === '') {
@@ -14,18 +19,20 @@ function resolvePort(rawValue) {
 
   const value = rawValue.trim();
 
+  const shown = escapeNonPrintable(value);
+
   if (!/^[0-9]+$/.test(value)) {
-    return { ok: false, message: `Invalid PORT value "${value}": must be an integer between 1024 and 65535.` };
+    return { ok: false, message: `Invalid PORT value "${shown}": must be an integer between 1024 and 65535.` };
   }
 
   const port = Number(value);
 
   if (port !== 0 && port < MIN_PORT) {
-    return { ok: false, message: `Invalid PORT value "${value}": privileged ports 1-1023 are not permitted; choose a port between 1024 and 65535.` };
+    return { ok: false, message: `Invalid PORT value "${shown}": privileged ports 1-1023 are not permitted; choose a port between 1024 and 65535.` };
   }
 
   if (port === 0 || port > MAX_PORT) {
-    return { ok: false, message: `Invalid PORT value "${value}": must be an integer between 1024 and 65535.` };
+    return { ok: false, message: `Invalid PORT value "${shown}": must be an integer between 1024 and 65535.` };
   }
 
   return { ok: true, port };
