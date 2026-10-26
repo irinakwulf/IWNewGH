@@ -74,7 +74,7 @@ Server listening on port 3000
 
 That line is written once the port is actually bound: `server.listen()` is asynchronous, so the confirmation comes from the listen callback rather than from the statement after the call. The process then stays in the foreground and serves requests until you stop it.
 
-The server binds the port alone, with no host argument (`server.listen(port)`), which makes it reachable at `http://localhost:3000`.
+The server binds the port alone, with no host argument (`server.listen(port)`), which makes it reachable at `http://localhost:3000`. Because no host is passed, that bind covers every interface rather than only the loopback one: while the server runs, any machine that can reach this host can reach the endpoint too, over plain HTTP, with no authentication, no access control and no rate limiting (see Scope and non-goals).
 
 ## Verifying the endpoints
 
@@ -177,8 +177,11 @@ The comparison is exact and case-sensitive, on the query-stripped path and on th
 | `GET /hello/` | `404`, body `Not Found` — no trailing-slash tolerance |
 | `GET /Hello`, `GET /HELLO` | `404`, body `Not Found` — the path is case-sensitive |
 | `GET /hello%2F` | `404`, body `Not Found` — no URL decoding is performed |
-| `POST /hello`, `HEAD /hello`, `PUT /hello` | `404`, body `Not Found` — the method must match exactly, and `HEAD` is not treated as `GET` |
+| `POST /hello`, `PUT /hello` | `404`, body `Not Found` — the method must match exactly |
+| `HEAD /hello` | `404`, no body on the wire — the method must match exactly, and `HEAD` is not treated as `GET` |
 | `GET /` or any other path | `404`, body `Not Found` |
+
+The handler writes the same `Not Found` literal in every unmatched case, but HTTP forbids a body on a `HEAD` response and the runtime omits it, so a `HEAD` probe observes the status and the `Content-Type` only — 0 bytes — while the same request sent as `GET` observes the 9-byte body.
 
 Every non-matching request receives the identical response, which does not reveal which check failed.
 
@@ -372,7 +375,7 @@ Each line is three space-separated tokens with no literal brackets: the first ma
 
 ```bash
 # start the server, keeping its log outside the repository, and remember its pid
-LOG=$(mktemp "${TMPDIR:-/tmp}/http-server.XXXXXX")   # a private file of your own, created by mktemp with a random suffix and owner-only permissions
+LOG=$(mktemp "${TMPDIR:-/tmp}/http-server.XXXXXX")   # a private file of your own, so the log never lands in the repository
 node server.js > "$LOG" 2>&1 & pid=$!
 
 # wait for the bind, issue the requests you want to count, then stop the server by its pid
@@ -629,7 +632,7 @@ A status of `1` means the message on stderr names the cause — an invalid `PORT
 
 **A request returns 404**
 
-The method and the query-stripped path must both match exactly. `/hello` matches; `/hello/`, `/Hello`, `/HELLO`, `/hello%2F`, `POST /hello` and `HEAD /hello` do not. The query string is removed before comparison, so `/hello?anything=1` does match. Every non-match returns the same `Not Found` body, which deliberately does not say which check failed.
+The method and the query-stripped path must both match exactly. `/hello` matches; `/hello/`, `/Hello`, `/HELLO`, `/hello%2F`, `POST /hello` and `HEAD /hello` do not. The query string is removed before comparison, so `/hello?anything=1` does match. Every non-match returns the same `Not Found` response, which deliberately does not say which check failed.
 
 ## Scope and non-goals
 
