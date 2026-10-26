@@ -6,12 +6,12 @@ const DEFAULT_PORT = 3000;
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 
-/** Escape every character outside printable ASCII in value, so a refusal message stays one log line; returns the escaped string. */
+/** Escape every character outside printable ASCII in value, so a value that came from outside the program cannot break the request line or a refusal message it appears in (value) -> string. */
 function escapeNonPrintable(value) {
   return value.replace(/[^\u0020-\u007E]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
-/** Resolve rawValue into a validated port, or a message explaining the refusal. */
+/** Resolve rawValue into a validated port or a message explaining the refusal (rawValue) -> { ok: true, port: number } | { ok: false, message: string }. */
 function resolvePort(rawValue) {
   if (rawValue === undefined || rawValue.trim() === '') {
     return { ok: true, port: DEFAULT_PORT };
@@ -40,7 +40,7 @@ function resolvePort(rawValue) {
 
 /** Log one line for the given method and pathname, before the request is routed (method, pathname) -> void. */
 function logRequest(method, pathname) {
-  console.log(`${new Date().toISOString()} ${method} ${pathname}`);
+  console.log(`${new Date().toISOString()} ${escapeNonPrintable(method)} ${escapeNonPrintable(pathname)}`);
 }
 
 /** Write statusCode and body to res with a text/plain Content-Type; the only response writer (res, statusCode, body) -> void. */
@@ -84,7 +84,7 @@ function requestListener(req, res) {
   handler(req, res);
 }
 
-/** Create the HTTP server with its listener and error handler attached; returns the server. */
+/** Create the HTTP server with its listener and error handler attached () -> http.Server. */
 function createServer() {
   const server = http.createServer(requestListener);
 
@@ -107,21 +107,17 @@ function onServerError(error) {
   process.exitCode = 1;
 }
 
-/** Shut the given server down on SIGINT, closing its connections and exiting with status 0. */
+/** Shut the given server down on SIGINT, closing its connections and exiting with status 0 (server) -> void. */
 function shutdown(server) {
   console.log('Received SIGINT. Shutting down gracefully.');
 
   // The two connection-closing calls below are typeof-guarded because
   // closeIdleConnections() and closeAllConnections() were added in Node v18.2.0, above
-  // the >=18.0.0 floor this program declares; the failsafe timer still guarantees a
-  // clean exit on Node 18.0.x. Idle connections are closed because Node 18's close()
-  // keeps existing connections, so an idle keep-alive socket would hold the process open.
+  // the >=18.0.0 floor this program declares; the failsafe timer still guarantees the
+  // process reaches exit status 0 on Node 18.0.x. Idle connections are closed because
+  // Node 18's close() keeps existing connections, so an idle keep-alive socket would
+  // hold the process open.
   const failsafe = setTimeout(() => {
-    // The exit waits for the line below to reach stdout instead of following it at
-    // once: stdout is a pipe in any scripted run, where the write is asynchronous, and
-    // process.exit() discards whatever it has not flushed. A consumer that has gone
-    // away reports the failure to the error handler rather than throwing, so the
-    // process still ends with status 0.
     process.stdout.once('error', () => process.exit(0));
     process.stdout.write('Forcing shutdown after 5s.\n', () => process.exit(0));
 
@@ -140,7 +136,12 @@ function shutdown(server) {
     console.log('Server closed. Exiting.');
 
     // process.exit(0) is deliberately not called here: it truncates pending stdout
-    // writes, and the line above is the evidence that the shutdown was clean.
+    // writes, and the 'Server closed. Exiting.' line is the evidence that the shutdown
+    // was clean. The failsafe's exit waits for its own write to reach stdout instead of
+    // following it at once, because stdout is a pipe in any scripted run, where the
+    // write is asynchronous; and a consumer that has gone away reports the failure to
+    // the process.stdout 'error' listener rather than throwing, so the process still
+    // ends with status 0.
     process.exitCode = 0;
   });
 }
