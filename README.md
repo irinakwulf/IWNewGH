@@ -36,7 +36,7 @@ node --version
 
 Expected: `v18.0.0` or higher. Any later LTS release also satisfies the floor.
 
-`seq`, `ps` and a POSIX shell are used only by the optional performance and memory checks (V7, V8 and V9 under Verification); nothing else is needed. There is no build tool, no database and no package to install.
+`seq` and `ps` are used only by the optional performance and memory checks (V7, V8 and V9 under Verification). A POSIX shell is needed throughout: the `PORT=… node server.js` form, the scripted shutdown under Stopping the server, and the checks that drive the server from the shell — V5's counting block, V6, V8, V9, V11, V12 and V13 — all rely on your shell's own job control or `$?`. Nothing else is needed. There is no build tool, no database and no package to install.
 
 ## Installation
 
@@ -265,7 +265,7 @@ Surrounding whitespace is trimmed, so `PORT=" 4000 "` is accepted as 4000.
 
 ### When the port is refused
 
-Three conditions stop the server before it serves anything. Each writes to stderr and exits with status `1`. In the messages below, `<value>` stands for the offending value and `<port>` for the port that could not be bound: the program substitutes the actual value, so the message it writes contains no angle brackets — V11, V12 and V13 under Verification show the same messages with a value in place.
+Four conditions stop the server before it serves anything. Each writes to stderr and exits with status `1`. In the messages below, `<value>` stands for the offending value, `<port>` for the port that could not be bound and `<error message>` for the runtime's own description of the failure: the program substitutes the actual text, so the messages it writes contain no angle brackets — V11, V12 and V13 under Verification show three of them with a value in place.
 
 **Not a decimal integer, or out of range.** This covers `abc`, `3000.5`, `-1`, `0x1F90`, `1e3`, `+3000`, `65536` and `0`:
 
@@ -287,6 +287,14 @@ Invalid PORT value "<value>": privileged ports 1-1023 are not permitted; choose 
 Port <port> is already in use. Stop the process using it or set PORT to a free port.
 ```
 
+**Any other failure to bind.** A listen failure whose cause is not the port being held is reported with the runtime's own message for it:
+
+```
+Failed to start server: <error message>
+```
+
+It exits with status `1` like the others, and no gate under Verification poses it: V13 covers the port-in-use case, and inducing a different listen failure depends on the host.
+
 Validation happens before `listen()` is called, which is why the privileged-port refusal needs no root privileges and produces no permission error: it is a validation outcome, not a failed bind. There is no override variable for privileged ports — the `1024` floor is the explicit configuration, and no second environment variable exists.
 
 ### Exit statuses
@@ -296,6 +304,8 @@ Validation happens before `listen()` is called, which is why the privileged-port
 ## Verification
 
 These are the checks that prove the behaviour described above. Run them from the repository root with the server started as documented — the gates use the default port `3000` unless a gate says otherwise — and compare the output literally. V7, V8 and V9 are measurements taken with host tools; every other gate is an exact match.
+
+The gates split into three groups by what they expect of port `3000`. V2, V3, V4 — and the in-terminal half of V5 — issue requests only, so they expect the server you started under Running the server above to still be listening on `3000`. V1, V5's counting block, V6, V9, V13 and V14's `npm start` each start a server of their own on `3000`, so stop that one with `CTRL+C` before you run any of them: against an already-held port each prints `Port 3000 is already in use. Stop the process using it or set PORT to a free port.` on stderr and exits `1` instead of producing the output shown below. V7 and V8 issue requests only too, but they come after those self-starting gates, so start a server again before them — `node server.js` in a second terminal, stopped with `CTRL+C` when you are finished — and V8's 50 request lines then appear on that server's stdout. V10 starts its own server on `4000`, V11 and V12 refuse a value before any bind is attempted, and V16 binds nothing, so none of those needs `3000` to be free.
 
 **V1 — starts on the default port**
 
@@ -362,7 +372,8 @@ Each line is three space-separated tokens with no literal brackets: the first ma
 
 ```bash
 # start the server, keeping its log outside the repository, and remember its pid
-node server.js > /tmp/http-server.log 2>&1 & pid=$!
+LOG=$(mktemp "${TMPDIR:-/tmp}/http-server.XXXXXX")   # a private file of your own, created by mktemp with a random suffix and owner-only permissions
+node server.js > "$LOG" 2>&1 & pid=$!
 
 # wait for the bind, issue the requests you want to count, then stop the server by its pid
 sleep 1
@@ -372,11 +383,14 @@ kill -INT $pid; wait $pid; echo "exit=$?"
 
 # grep prints the number of request lines; wc -l counts every line, so it also includes the
 # startup line and the two shutdown lines
-grep -c 'Z ' /tmp/http-server.log
-wc -l < /tmp/http-server.log
+grep -c 'Z ' "$LOG"
+wc -l < "$LOG"
+
+# remove the log file; nothing is left behind
+rm -f "$LOG"
 ```
 
-Run it as written and it prints `exit=0`, then `2` and `5`: the two requests it issues, and every line the server wrote — those two request lines plus the startup line and the two shutdown lines. The counts appear because only the server process receives `SIGINT`. Counting through a pipeline cannot produce them: a terminal sends `SIGINT` to every process in its foreground process group, so a pipeline such as `node server.js | grep -c 'Z '` delivers the signal to the counting filter as well, and the filter dies on its default disposition before it can print its total — the server is the only process that installs a handler. Signal the server process by its pid, as above, and delete `/tmp/http-server.log` when you are finished with it.
+Run it as written and it prints `exit=0`, then `2` and `5`: the two requests it issues, and every line the server wrote — those two request lines plus the startup line and the two shutdown lines. The counts appear because only the server process receives `SIGINT`. Counting through a pipeline cannot produce them: a terminal sends `SIGINT` to every process in its foreground process group, so a pipeline such as `node server.js | grep -c 'Z '` delivers the signal to the counting filter as well, and the filter dies on its default disposition before it can print its total — the server is the only process that installs a handler. Signal the server process by its pid, as above; the block removes its log file at its end. The path comes from `mktemp`, given an explicit template in `${TMPDIR:-/tmp}`, which creates the file itself with a random name and owner-only permissions (mode `0600`), whereas a fixed name in the shared temporary directory can be pre-placed as a file or a symlink for the server's output to be written into.
 
 **V6 — clean shutdown**
 
@@ -595,6 +609,14 @@ Something else is bound to that port. Fix: stop the process holding it, or start
 PORT=4000 node server.js
 ```
 
+**`Failed to start server: <error message>`**
+
+The port could not be bound and the cause is not another process holding it. `<error message>` is the runtime's own description of the failure — the same substitution notation as in Configuration above, not text the program prints — so the message itself names what to act on. The exit status is `1` and nothing is left listening. Rule the configuration out with the override form and act on what the message says:
+
+```bash
+PORT=4000 node server.js
+```
+
 **Nothing is printed on startup**
 
 The startup line is written from the listen callback, so it appears only once the port is actually bound. Check the exit status of the start command in the same shell, immediately after it returns:
@@ -603,7 +625,7 @@ The startup line is written from the listen callback, so it appears only once th
 echo $?
 ```
 
-A status of `1` means the message on stderr names the cause — an invalid `PORT`, a privileged port, or a port already in use — and that message is what to act on.
+A status of `1` means the message on stderr names the cause — an invalid `PORT`, a privileged port, a port already in use, or another listen failure — and that message is what to act on.
 
 **A request returns 404**
 
