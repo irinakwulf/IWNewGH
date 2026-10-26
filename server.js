@@ -93,12 +93,15 @@ function createServer() {
   return server;
 }
 
-/** Report a bind failure on stderr and set exit code 1, reading the failed port from error.port (error) -> void. */
+/** Report a server 'error' event: a listen failure exits 1 and a post-bind one does not, the port coming from error.port (error) -> void. */
 function onServerError(error) {
   if (error.code === 'EADDRINUSE') {
     console.error(`Port ${error.port} is already in use. Stop the process using it or set PORT to a free port.`);
-  } else {
+  } else if (error.syscall === 'listen') {
     console.error(`Failed to start server: ${error.message}`);
+  } else {
+    console.error(`Server error while serving: ${error.message}`);
+    return;
   }
 
   process.exitCode = 1;
@@ -114,13 +117,17 @@ function shutdown(server) {
   // clean exit on Node 18.0.x. Idle connections are closed because Node 18's close()
   // keeps existing connections, so an idle keep-alive socket would hold the process open.
   const failsafe = setTimeout(() => {
-    console.log('Forcing shutdown after 5s.');
+    // The exit waits for the line below to reach stdout instead of following it at
+    // once: stdout is a pipe in any scripted run, where the write is asynchronous, and
+    // process.exit() discards whatever it has not flushed. A consumer that has gone
+    // away reports the failure to the error handler rather than throwing, so the
+    // process still ends with status 0.
+    process.stdout.once('error', () => process.exit(0));
+    process.stdout.write('Forcing shutdown after 5s.\n', () => process.exit(0));
 
     if (typeof server.closeAllConnections === 'function') {
       server.closeAllConnections();
     }
-
-    process.exit(0);
   }, 5000);
 
   if (typeof server.closeIdleConnections === 'function') {

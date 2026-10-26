@@ -358,14 +358,25 @@ With the server in one terminal, issue V2 and V3 from another, then read the ser
 2026-10-26T07:56:28.334Z GET /invalid
 ```
 
-Each line is three space-separated tokens with no literal brackets: the first matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`, the second is exactly the request method, and the third is the query-stripped path, so `GET /hello?x=1` logs `... GET /hello`. The request answered with 404 is logged like any other. To count the lines without writing a file into the repository, pipe the server's stdout through a counting filter:
+Each line is three space-separated tokens with no literal brackets: the first matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`, the second is exactly the request method, and the third is the query-stripped path, so `GET /hello?x=1` logs `... GET /hello`. The request answered with 404 is logged like any other. To count the lines without writing a file into the repository, start the server with its log outside the repository, drive the requests, stop the server by its pid, and count what it wrote:
 
 ```bash
-node server.js | grep -c 'Z '
-node server.js | wc -l
+# start the server, keeping its log outside the repository, and remember its pid
+node server.js > /tmp/http-server.log 2>&1 & pid=$!
+
+# wait for the bind, issue the requests you want to count, then stop the server by its pid
+sleep 1
+curl -s -o /dev/null http://localhost:3000/hello
+curl -s -o /dev/null http://localhost:3000/invalid
+kill -INT $pid; wait $pid; echo "exit=$?"
+
+# grep prints the number of request lines; wc -l counts every line, so it also includes the
+# startup line and the two shutdown lines
+grep -c 'Z ' /tmp/http-server.log
+wc -l < /tmp/http-server.log
 ```
 
-The count prints when you stop the server with `CTRL+C`.
+Run it as written and it prints `exit=0`, then `2` and `5`: the two requests it issues, and every line the server wrote — those two request lines plus the startup line and the two shutdown lines. The counts appear because only the server process receives `SIGINT`. Counting through a pipeline cannot produce them: a terminal sends `SIGINT` to every process in its foreground process group, so a pipeline such as `node server.js | grep -c 'Z '` delivers the signal to the counting filter as well, and the filter dies on its default disposition before it can print its total — the server is the only process that installs a handler. Signal the server process by its pid, as above, and delete `/tmp/http-server.log` when you are finished with it.
 
 **V6 — clean shutdown**
 
