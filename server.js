@@ -6,10 +6,6 @@ const DEFAULT_PORT = 3000;
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 
-const ROUTES = {
-  'GET /hello': handleHello,
-};
-
 /** Resolve rawValue into a validated port, or a message explaining the refusal. */
 function resolvePort(rawValue) {
   if (rawValue === undefined || rawValue.trim() === '') {
@@ -46,19 +42,23 @@ function sendPlainText(res, statusCode, body) {
   res.end(body);
 }
 
-/** Handle GET /hello: respond 200 with the body 'Hello world'. */
+/** Handle GET /hello: respond 200 with the body 'Hello world' (req, res) -> void. */
 function handleHello(req, res) {
   // req is read by no handler: the route key already established the method and the
   // path, and the parameter is kept so every entry in ROUTES shares one signature.
   sendPlainText(res, 200, 'Hello world');
 }
 
-/** Handle every unmatched method and path: respond 404 with the body 'Not Found'. */
+/** Handle every unmatched method and path: respond 404 with the body 'Not Found' (req, res) -> void. */
 function handleNotFound(req, res) {
   sendPlainText(res, 404, 'Not Found');
 }
 
-/** Route one request: derive the pathname, log it, dispatch on ROUTES, then fall through to 404. */
+const ROUTES = {
+  'GET /hello': handleHello,
+};
+
+/** Route one request through ROUTES, falling through to the 404 handler (req, res) -> void. */
 function requestListener(req, res) {
   // The query string is cut with split rather than parsed with new URL: split cannot
   // throw on a malformed request target, so request data stays a plain method and path
@@ -77,7 +77,7 @@ function requestListener(req, res) {
   handler(req, res);
 }
 
-/** Create the HTTP server with its request listener and its error handler attached. */
+/** Create the HTTP server with its listener and error handler attached; returns the server. */
 function createServer() {
   const server = http.createServer(requestListener);
 
@@ -97,7 +97,7 @@ function onServerError(error) {
   process.exitCode = 1;
 }
 
-/** Shut the server down on SIGINT, closing its connections and exiting with status 0. */
+/** Shut the given server down on SIGINT, closing its connections and exiting with status 0. */
 function shutdown(server) {
   console.log('Received SIGINT. Shutting down gracefully.');
 

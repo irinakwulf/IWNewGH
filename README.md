@@ -358,7 +358,14 @@ With the server in one terminal, issue V2 and V3 from another, then read the ser
 2026-10-26T07:56:28.334Z GET /invalid
 ```
 
-Each line is three space-separated tokens with no literal brackets: the first matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`, the second is exactly the request method, and the third is the query-stripped path, so `GET /hello?x=1` logs `... GET /hello`. The request answered with 404 is logged like any other. To count the lines without writing a file into the repository, pipe the server's stdout through `grep -c 'Z '` or `wc -l` and stop it with `CTRL+C`; the count prints when the stream ends.
+Each line is three space-separated tokens with no literal brackets: the first matches `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`, the second is exactly the request method, and the third is the query-stripped path, so `GET /hello?x=1` logs `... GET /hello`. The request answered with 404 is logged like any other. To count the lines without writing a file into the repository, pipe the server's stdout through a counting filter:
+
+```bash
+node server.js | grep -c 'Z '
+node server.js | wc -l
+```
+
+The count prints when you stop the server with `CTRL+C`.
 
 **V6 — clean shutdown**
 
@@ -529,7 +536,17 @@ grep -n "TODO\|FIXME\|XXX\|TBD\|placeholder" server.js
 grep -c "require(" server.js
 ```
 
-Expected: the second command lists exactly the three delivered files —
+Expected: the first command lists the three delivered files beside the repository's `.git` directory, and a working tree that also carries the pre-existing `blitzy/` research directory — as the one this repository was built in does — lists five entries:
+
+```
+.git
+README.md
+blitzy
+package.json
+server.js
+```
+
+`blitzy/` is a pre-existing research directory: it holds no deliverable and stands outside the three-file delivered set, so its presence is not a footprint failure. The second command lists exactly the delivered set —
 
 ```
 README.md
@@ -537,7 +554,7 @@ package.json
 server.js
 ```
 
-beside the repository's `.git` directory, with no `node_modules`, no `package-lock.json`, no test file and no CI file. `node --check server.js` prints nothing, which means the source parses cleanly. The marker grep finds no match: that check is scoped to `server.js`, the only code file, and this README contains those marker words only inside this command, as its search pattern. The last command prints
+with no `node_modules`, no `package-lock.json`, no test file and no CI file. `node --check server.js` prints nothing, which means the source parses cleanly. The marker grep finds no match: that check is scoped to `server.js`, the only code file, and this README contains those marker words only inside this command, as its search pattern. The last command prints
 
 ```
 1
@@ -569,7 +586,13 @@ PORT=4000 node server.js
 
 **Nothing is printed on startup**
 
-The startup line is written from the listen callback, so it appears only once the port is actually bound. Check the exit status first: `echo $?` after the command returns. A status of `1` means the message on stderr names the cause — an invalid `PORT`, a privileged port, or a port already in use — and that message is what to act on.
+The startup line is written from the listen callback, so it appears only once the port is actually bound. Check the exit status of the start command in the same shell, immediately after it returns:
+
+```bash
+echo $?
+```
+
+A status of `1` means the message on stderr names the cause — an invalid `PORT`, a privileged port, or a port already in use — and that message is what to act on.
 
 **A request returns 404**
 
