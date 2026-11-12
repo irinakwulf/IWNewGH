@@ -1,0 +1,22 @@
+[project]
+name = "taskboard"
+version = "0.1.0"
+description = "A simple local task-management web application for a single project."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --cov=app --cov-branch --cov-report=term-missing --cov-fail-under=85"
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

@@ -1,0 +1,24 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data (created by the application)
+instance/
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
