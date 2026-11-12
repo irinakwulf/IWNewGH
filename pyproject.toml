@@ -6,8 +6,12 @@ requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Keeps `app` and `seed` importable from the repository root under both
+# `python -m pytest` and a bare `pytest` invocation.
 pythonpath = ["."]
-addopts = "-ra --cov=app --cov-branch --cov-report=term-missing --cov-fail-under=85"
+addopts = "--cov=app --cov-branch --cov-report=term-missing"
+# The 85% floor is configured once, in [tool.coverage.report] fail_under, which
+# pytest-cov applies; addopts deliberately carries no --cov-fail-under copy of it.
 
 [tool.coverage.run]
 branch = true
