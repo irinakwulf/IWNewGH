@@ -3,22 +3,29 @@
 venv/
 env/
 
-# Runtime data (created by the application)
+# Runtime data: instance/taskboard.sqlite3 is the disposable local database, created at
+# start-up and rebuilt by `flask --app app seed-db`, so it is never committed
 instance/
 
-# Python bytecode and caches
+# Python bytecode
 __pycache__/
 *.py[cod]
-*.egg-info/
-.pytest_cache/
+*$py.class
+*.so
 
-# Coverage output
+# Test and coverage output
 .coverage
 .coverage.*
-htmlcov/
 coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Environment files
+.env
+.env.*
 
 # Editor and OS noise
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
