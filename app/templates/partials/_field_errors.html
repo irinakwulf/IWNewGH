@@ -1,0 +1,47 @@
+{#
+  Inline form errors: the two macros every form in the application renders with.
+
+  Imported by app/templates/project.html, app/templates/tasks/form.html and
+  app/templates/tasks/detail.html as
+
+      {% from "partials/_field_errors.html" import error_summary, field_error %}
+
+  `error_summary(errors)` renders the block that sits above the form: a lead-in
+  sentence and one list item per message, so a reviewer sees every problem at once
+  instead of finding them one submission at a time.
+
+  `field_error(errors, field)` renders the single message for one field, beside
+  that field. It also owns the id convention: a message carries the id
+  `<field>-error`, which is the value a caller puts in the control's
+  `aria-describedby` (with `aria-invalid="true"`) so the message is announced with
+  the field it belongs to. This file is the only place that id is composed; a
+  caller hardcodes neither the id nor the message.
+
+  `errors` is the `{field: message}` mapping app/validation.py returns, and is
+  empty exactly when the submission was accepted. Messages are rendered exactly as
+  the parser produced them -- never reworded, reordered or truncated -- because the
+  wording is asserted by the tests, and both macros autoescape, so a message is
+  text even if it contains markup.
+
+  Safe to import: the file emits no markup of its own, is not part of the template
+  inheritance tree, and so renders nothing until a caller invokes a macro.
+#}
+
+{% macro error_summary(errors) -%}
+{%- if errors -%}
+<div class="field-error__summary" role="alert">
+  <p>There is a problem with this form. Please correct the fields below.</p>
+  <ul>
+    {%- for message in errors.values() %}
+    <li>{{ message }}</li>
+    {%- endfor %}
+  </ul>
+</div>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro field_error(errors, field) -%}
+{%- if errors and errors.get(field) -%}
+<p class="field-error" id="{{ field }}-error">{{ errors[field] }}</p>
+{%- endif -%}
+{%- endmacro %}
