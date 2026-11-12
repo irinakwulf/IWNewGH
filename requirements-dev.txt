@@ -1,10 +1,25 @@
+# Test-time dependencies, pinned exactly. Installing this file installs both sets:
+# the runtime closure from requirements.txt and the seven test-time packages below.
+# Run the suite from the repository root with: python -m pytest
 -r requirements.txt
 
-# Test-time dependencies, pinned exactly. Installing this file installs both sets.
+# pytest: the runner - fixtures, parametrization, plain asserts; uses Flask's own test client, so no plugin.
 pytest==9.1.1
+
+# pytest-cov: runs the suite under coverage and applies the gate configured in pyproject.toml.
 pytest-cov==7.1.0
+
+# coverage: the measurement engine, run with branch measurement over the app package.
 coverage==7.17.0
+
+# iniconfig: parses the pytest configuration file.
 iniconfig==2.3.1
+
+# packaging: version parsing and comparison performed by pytest.
 packaging==26.3
+
+# pluggy: plugin hook machinery used by pytest and pytest-cov.
 pluggy==1.7.0
+
+# Pygments: syntax highlighting for assertion output in the terminal.
 Pygments==2.21.0
