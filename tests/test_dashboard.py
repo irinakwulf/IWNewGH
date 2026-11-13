@@ -25,10 +25,11 @@ two empty states. Everything else in the markup may change freely.
 
 The dashboard's failure path is asserted here too: a raise from the service the
 view calls answers with the 500 page, so the delivery of "the error pages" is a
-check rather than a reading of the template. Beside it sits the contention case
-the connection's WAL setting and busy timeout exist for: a read taken while a
-second connection holds the database's write lock answers its four cards rather
-than that page.
+check rather than a reading of the template. Beside it sits a request whose Host
+header the routing layer refuses, which is a client error answered by the 400 page
+inside the same shell, and the contention case the connection's WAL setting and
+busy timeout exist for: a read taken while a second connection holds the database's
+write lock answers its four cards rather than that page.
 
 The module talks to Flask's test client, through the ``seeded_client``, ``client``
 and ``app`` fixtures of ``tests/conftest.py``, and the reads of the database it
@@ -121,6 +122,23 @@ MONTH_ABBREVIATIONS: tuple[str, ...] = (
 # page rather than with four cards, so its absence is asserted wherever a
 # successful render is.
 UNEXPECTED_FAILURE_HEADING = "Internal Server Error"
+
+# The heading the 400 page renders. A request the routing layer refuses is a client
+# error, so it is answered by that page rather than by the 500 page above, and the
+# heading is read from the page rather than from the status alone.
+BAD_REQUEST_HEADING = "Bad Request"
+
+# The longest single label a DNS name allows, in characters. Werkzeug IDNA-encodes
+# the request's Host while binding the URL map to it, so a label past this length
+# is refused before an adapter exists -- which is what makes this number, rather
+# than any value the application names, the boundary a malformed Host is measured
+# against.
+DNS_LABEL_MAXIMUM = 63
+
+# The shell's one stylesheet. base.html renders it for every page, so a page
+# carrying it was built inside the shell, and one carrying it for a request with no
+# usable Host is the reason the shell builds its links without the request.
+STYLESHEET_PATH = "/static/css/app.css"
 
 # The 500 page's way back to the dashboard. Matched with its own anchor so the
 # classes and attribute order stay the template's business, and so a page that only
@@ -786,3 +804,49 @@ def test_an_unhandled_failure_renders_the_500_page_inside_the_shell(
     # happened without naming what broke.
     assert failure not in body
     assert "RuntimeError" not in body
+
+
+@pytest.mark.parametrize(
+    ("label_length", "expected_status"),
+    (
+        (DNS_LABEL_MAXIMUM, 200),
+        (DNS_LABEL_MAXIMUM + 1, 400),
+        (200, 400),
+        (300, 400),
+    ),
+)
+def test_a_host_label_is_answered_by_the_application_page_inside_the_shell(
+    seeded_client, label_length, expected_status
+):
+    """A Host header displaces neither the page nor the status it deserves.
+
+    The routing layer encodes the request's Host while binding the URL map to it, so
+    a single label the DNS maximum allows is an ordinary request while a longer one
+    is refused with a ``BadHost`` -- a 400 -- before any adapter exists. The pages
+    behind both outcomes are the application's own, rendered by a shell whose links
+    are built from its URL map rather than from the request: a shell that read the
+    request's adapter would fail on the refused one, and the failure would escalate
+    the client error to a 500 answered outside the shell entirely.
+    """
+    response = seeded_client.get(DASHBOARD_PATH, headers={"Host": "a" * label_length})
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == expected_status
+    # Inside the shell in both cases: the stylesheet and the navigation are
+    # rendered by the shell alone, and neither has a request-derived host to use.
+    assert f'href="{STYLESHEET_PATH}"' in body
+    assert f'href="{TASK_LIST_PATH}"' in body
+    # And nothing of the failure behind either answer reaches the page.
+    assert "Traceback" not in body
+    assert "AttributeError" not in body
+    assert ".py" not in body
+    if expected_status == 200:
+        # A label inside the DNS limit is an ordinary request, so the dashboard
+        # still reports its four cards.
+        assert set(metric_cards(body)) == set(CARD_CONTRACT)
+    else:
+        # A malformed request is a client error answered by the 400 page, whose one
+        # way back to the dashboard sits beside the shell's own navigation.
+        headings = [match.group("text").strip() for match in _HEADING.finditer(body)]
+        assert headings == [f"{BAD_REQUEST_HEADING} (400)"]
+        assert anchor_hrefs(body, BACK_TO_DASHBOARD_TEXT) == [DASHBOARD_PATH]

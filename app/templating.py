@@ -6,6 +6,11 @@ filters, or render a deadline through the :func:`format_deadline` global, so the
 status badge, the deadline column and the deadline indicator cannot drift apart,
 and changing how a date reads is a change in one file.
 
+The page shell and the three error pages take their links from the
+:func:`app_path` global. It resolves an endpoint against the application's URL map
+alone, so one of those pages still renders for a request Flask could build no URL
+adapter for.
+
 The stored shapes are the ones :mod:`app.models` documents: an ISO-8601
 ``YYYY-MM-DD`` string for a date, the UTC text SQLite writes with
 ``datetime('now')`` for a timestamp, and a lowercase member of
@@ -24,7 +29,7 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING
 
-from flask import g, has_request_context
+from flask import current_app, g, has_request_context
 
 from app import models
 
@@ -35,6 +40,7 @@ __all__ = [
     "DEADLINE_SEPARATOR",
     "MONTHS",
     "SOON_WINDOW_DAYS",
+    "app_path",
     "deadline_state",
     "format_date",
     "format_deadline",
@@ -81,6 +87,12 @@ _COMPLETED_STATUS = "completed"
 # The attribute of ``flask.g`` the request's reference day is cached under. A module
 # constant so the helper and any reader of it cannot disagree on the spelling.
 _REFERENCE_DAY_KEY = "deadline_reference_day"
+
+# The server name :func:`app_path` binds the URL map to. A fixed literal, because the
+# adapter a path is built from must not carry anything the request supplied: an
+# unusable ``Host`` header is exactly the case those pages have to survive, and any
+# value would do, since nothing built here is ever external.
+_PATH_ONLY_SERVER_NAME = "localhost"
 
 
 def _parse_date(value: object) -> datetime.date | None:
@@ -289,17 +301,47 @@ def format_deadline(deadline: str | None, status: str = "pending") -> str:
     return f"{date_text} {DEADLINE_SEPARATOR} {word}"
 
 
+def app_path(endpoint: str, **values: object) -> str:
+    """Build the path an endpoint is served at, without reading the request's Host.
+
+    :func:`flask.url_for` builds through the request's own URL adapter, and a
+    request whose ``Host`` header cannot be encoded -- one carrying a label longer
+    than the 63 characters a DNS label allows, for instance -- is answered by
+    werkzeug with a ``BadHost`` (400) before any adapter is bound, and Flask leaves
+    that request with no adapter at all. The page shell and the three error pages
+    still owe that request a rendered page, so the links and the stylesheet they
+    carry are built here instead: from the application's own URL map, bound to
+    :data:`_PATH_ONLY_SERVER_NAME`, in its relative form. For a request served at
+    the application's root the result is the same path ``url_for`` returns.
+
+    Args:
+        endpoint: The endpoint to build, such as ``"dashboard.index"``.
+        **values: The endpoint's variable arguments, such as ``filename`` for the
+            ``"static"`` endpoint.
+
+    Returns:
+        The path that endpoint is served at, beginning with ``/``.
+
+    Raises:
+        werkzeug.routing.BuildError: If ``values`` does not fit the endpoint, the
+            same failure ``url_for`` raises for that call.
+    """
+    adapter = current_app.url_map.bind(_PATH_ONLY_SERVER_NAME, url_scheme="http")
+    return adapter.build(endpoint, values)
+
+
 def init_app(app: Flask) -> None:
-    """Register the presentation filters and the deadline global on ``app``.
+    """Register the presentation filters and the two globals on ``app``.
 
     ``add_template_filter`` takes the callable's ``__name__`` as the filter name, so
     the function names above are the template-facing contract and none of them is
-    wrapped or renamed. :func:`format_deadline` is a global rather than a fifth
-    filter because the filter set is fixed at four; a global is called by name in a
-    template exactly as a filter is, without widening that set.
+    wrapped or renamed. :func:`format_deadline` and :func:`app_path` are globals
+    rather than filters because the filter set is fixed at four; a global is called
+    by name in a template exactly as a filter is, without widening that set.
     """
     app.add_template_filter(format_date)
     app.add_template_filter(format_datetime)
     app.add_template_filter(status_label)
     app.add_template_filter(deadline_state)
     app.add_template_global(format_deadline)
+    app.add_template_global(app_path)

@@ -43,8 +43,8 @@
   <p>{{ error.description }}</p>
   <p>The task or page you asked for does not exist. The task list shows every task that does.</p>
   <div class="row">
-    <a class="button button--secondary" href="{{ url_for('dashboard.index') }}">Back to the dashboard</a>
-    <a class="button button--secondary" href="{{ url_for('tasks.list') }}">Back to tasks</a>
+    <a class="button button--secondary" href="{{ app_path('dashboard.index') }}">Back to the dashboard</a>
+    <a class="button button--secondary" href="{{ app_path('tasks.list') }}">Back to tasks</a>
   </div>
 </div>
 {% endblock %}

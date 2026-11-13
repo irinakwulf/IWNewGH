@@ -426,7 +426,8 @@ five minutes and exercises every control the project was asked to make work.
 │   ├── models.py               # Project, Member, Task and Comment dataclasses; TASK_STATUSES and STATUS_LABELS
 │   ├── validation.py           # Form and filter parsing; every rule and every message
 │   ├── templating.py           # Jinja filters: format_date, format_datetime, status_label, deadline_state;
-│   │                           # the format_deadline global that renders a whole deadline indicator
+│   │                           # the format_deadline global that renders a whole deadline indicator;
+│   │                           # the app_path global the shell and the error pages build their links with
 │   ├── services/               # Business rules: no HTTP, no request object, and their own
 │   │                           #   parameterized statements through app/db.get_db()
 │   │   ├── projects.py         #   get_project, save_project

@@ -32,7 +32,7 @@
   <h1>{{ error.name }} ({{ error.code }})</h1>
   <p>{{ error.description }}</p>
   <div class="row">
-    <a class="button button--secondary" href="{{ url_for('dashboard.index') }}">Back to the dashboard</a>
+    <a class="button button--secondary" href="{{ app_path('dashboard.index') }}">Back to the dashboard</a>
   </div>
 </div>
 {% endblock %}

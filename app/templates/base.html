@@ -30,9 +30,15 @@
   with no wrapper element around it: partials/_flash.html owns what it renders.
 
   Every value this file renders is a literal declared in it or a URL built by
-  `url_for`; no request parameter is read and no user text reaches it, so there is
-  nothing here to escape and no filter or conversion that could bypass the
-  autoescaping Jinja applies to every `.html` template. The classes are the ones
+  `app_path`, the global app/templating.py registers; no request parameter is read
+  and no user text reaches it, so there is nothing here to escape and no filter or
+  conversion that could bypass the autoescaping Jinja applies to every `.html`
+  template. `app_path` rather than `url_for` is the rule for this file and for the
+  three error pages: `url_for` builds through the request's URL adapter, and a
+  request whose `Host` header cannot be encoded -- a label longer than 63
+  characters -- is refused before one is bound, so this shell would fail to render
+  for the very error page that has to answer that request. `app_path` reads the
+  application's URL map alone and yields the same paths. The classes are the ones
   app/static/css/app.css defines -- `.header`, `.nav`, `.container`, `.footer` and
   the `.row` primitive -- and every style comes from that stylesheet: this file
   carries no inline style attribute, no second stylesheet, no font, no image and
@@ -48,16 +54,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ product_name }}{% endblock %}</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    <link rel="stylesheet" href="{{ app_path('static', filename='css/app.css') }}">
   </head>
   <body>
     <header class="header">
       <div class="container row">
         <span>{{ product_name }}</span>
         <nav class="nav" aria-label="Main">
-          <a href="{{ url_for('dashboard.index') }}"{% if endpoint == 'dashboard.index' %} aria-current="page"{% endif %}>Dashboard</a>
-          <a href="{{ url_for('tasks.list') }}"{% if endpoint.startswith('tasks.') %} aria-current="page"{% endif %}>Tasks</a>
-          <a href="{{ url_for('project.view') }}"{% if endpoint == 'project.view' %} aria-current="page"{% endif %}>Project</a>
+          <a href="{{ app_path('dashboard.index') }}"{% if endpoint == 'dashboard.index' %} aria-current="page"{% endif %}>Dashboard</a>
+          <a href="{{ app_path('tasks.list') }}"{% if endpoint.startswith('tasks.') %} aria-current="page"{% endif %}>Tasks</a>
+          <a href="{{ app_path('project.view') }}"{% if endpoint == 'project.view' %} aria-current="page"{% endif %}>Project</a>
         </nav>
       </div>
     </header>
