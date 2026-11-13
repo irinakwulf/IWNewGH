@@ -1,0 +1,49 @@
+{#
+  The 404 page: what the application shows when an address it was asked for does
+  not exist.
+
+  Rendered by the handler app/__init__.py registers for the 404 status, which
+  passes the raised werkzeug exception as `error` -- `.code`, `.name` and
+  `.description` -- and answers with the 404 status.
+
+  That handler sits on the application object rather than on a blueprint, so it
+  answers every 404 the application can produce, not only the one a task route
+  raises when a service returns None for an unknown id. Flask's own routing raises
+  the same exception for an address that matches no route at all, and this page
+  therefore has to read correctly for both: a task id that does not exist, and a
+  URL that was never routed. That is why the wording below says "the task or page",
+  and why it names no id, no path and no other value taken from the request.
+  `error.description` is the exception's own text -- the message a view supplied to
+  abort() when it supplied one, and werkzeug's standard sentence otherwise -- and
+  it is autoescaped like every other template in the application, with no filter
+  and no markup object anywhere in the tree bypassing that escaping.
+
+  The screen's single top-level heading belongs here rather than to
+  app/templates/base.html, which supplies the shell, the navigation and the footer
+  but no heading of its own, so every view and every error page owns one. The
+  navigation is also base.html's: on an error page no link can be current, because
+  a request that matched no route leaves request.endpoint None, and that is
+  correct.
+
+  The markup and its classes are the ones app/static/css/app.css defines and no
+  others -- `.empty-state` for the heading-sentence-actions block, `.row` for the
+  action line and `.button` with `.button--secondary` for both actions. A failure
+  page has no primary action, so neither link is styled as one. There is no inline
+  styling, no event-handler attribute and no scripting here: this application ships
+  none.
+#}
+{% extends "base.html" %}
+
+{% block title %}{{ error.name }} ({{ error.code }}){% endblock %}
+
+{% block content %}
+<div class="empty-state">
+  <h1>{{ error.name }} ({{ error.code }})</h1>
+  <p>{{ error.description }}</p>
+  <p>The task or page you asked for does not exist. The task list shows every task that does.</p>
+  <div class="row">
+    <a class="button button--secondary" href="{{ url_for('dashboard.index') }}">Back to the dashboard</a>
+    <a class="button button--secondary" href="{{ url_for('tasks.list') }}">Back to tasks</a>
+  </div>
+</div>
+{% endblock %}
