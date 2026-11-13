@@ -297,6 +297,31 @@ def list_html(client: FlaskClient) -> str:
     return response.get_data(as_text=True)
 
 
+def opening_tag(html: str, marker: str) -> str:
+    """Return the opening tag of ``html`` that carries the literal ``marker``.
+
+    A form or one of its controls is named by a slice of its own markup -- an
+    ``id="..."`` or the action the form posts to -- rather than by the position it
+    happens to occupy, so a case reads as the control it asserts on. The match stops
+    at the tag's own ``>``, so an attribute of one element is never found on the
+    next: the page carries two member selects and four labelled fields, and only the
+    tag named by the marker is returned.
+    """
+    match = re.search(rf"<[^>]*{re.escape(marker)}[^>]*>", html)
+    assert match is not None, f"no opening tag carries {marker!r}"
+    return match.group(0)
+
+
+def declares_attribute(tag: str, name: str) -> bool:
+    """Return whether the opening tag ``tag`` declares the attribute ``name``.
+
+    The name must stand as a whole word inside the tag, which is what tells a
+    control's boolean ``required`` apart from any longer attribute that merely
+    contains those letters.
+    """
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", tag) is not None
+
+
 # ---------------------------------------------------------------------------
 # The seeded conversation. What a task's page shows before anything is written:
 # every comment, its author, its timestamp, and the order they happened in.
@@ -366,6 +391,51 @@ def test_task_list_shows_each_tasks_comment_count(
         row = row_markup(html, task["title"])
         expected_count = len(task["comments"])
         assert f"<td>{expected_count}</td>" in row, task["title"]
+
+
+# ---------------------------------------------------------------------------
+# The add-comment form's own markup. Before anything is typed or refused, the form
+# states which of its fields the server treats as mandatory, and keeps the server
+# the judge of what a valid submission is.
+# ---------------------------------------------------------------------------
+
+# The two controls the comment parser refuses when they are missing or blank, each
+# named by the id its label points at. The task form marks its title the same way,
+# so the two data-entry forms signal a mandatory field identically.
+REQUIRED_COMMENT_CONTROLS = (
+    pytest.param("author_id", id="author"),
+    pytest.param("body", id="comment-body"),
+)
+
+
+@pytest.mark.parametrize("control_id", REQUIRED_COMMENT_CONTROLS)
+def test_the_add_comment_form_marks_its_required_fields(
+    seeded_client: FlaskClient, app: Flask, control_id: str
+) -> None:
+    """The add-comment form marks both mandatory fields and keeps the server in charge.
+
+    ``required`` on a control is a statement about what the parser enforces rather than
+    a rule of its own: app.validation refuses a blank or unknown author and a blank
+    body, so the form tells a screen-reader user the same thing up front instead of only
+    after a rejection. Each case therefore asserts the pair -- the control it names
+    declares ``required``, and the form holding it declares ``novalidate`` -- because a
+    bare ``required`` would let the browser's own bubble stand in place of the sentence
+    the page has to show beside the field.
+
+    The form is found by the action it posts to and the control by its ``id``, both
+    built from the derived task id, so neither case writes an id down or depends on
+    where on the page the control sits.
+    """
+    task = task_without_comments()
+    task_id = task_id_for(app, task["title"])
+
+    html = detail_html(seeded_client, task_id)
+
+    form = opening_tag(html, f'action="/tasks/{task_id}/comments"')
+    assert declares_attribute(form, "novalidate"), form
+
+    control = opening_tag(html, f'id="{control_id}"')
+    assert declares_attribute(control, "required"), control
 
 
 # ---------------------------------------------------------------------------

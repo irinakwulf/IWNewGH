@@ -28,6 +28,16 @@
   a URL. Neither form offers a `next`/`redirect` input, so no redirect target is
   request-supplied.
 
+  `required` and `novalidate` are one decision here, not two. The controls the
+  comment parser refuses when they are absent -- the author select and the body
+  textarea -- declare `required`, so the form itself states which fields are
+  mandatory instead of leaving a screen-reader user to learn it from a rejection.
+  `novalidate` on the form is what keeps that declaration from taking over the
+  submission: the attribute says what app/validation.py enforces, so the browser
+  must not answer a blank control with a bubble of its own in place of the
+  parser's sentence. The task form pairs the two the same way, for the same
+  reason, so both data-entry forms signal a mandatory field identically.
+
   Presentation is delegated: dates, timestamps, status labels and deadline states
   come from the four filters in app/templating.py, and the deadline's whole text --
   its absolute date, separator and relative word -- comes from its
@@ -125,10 +135,10 @@
 
 <h2>Add a comment</h2>
 {{ error_summary(errors) }}
-<form class="stack" method="post" action="{{ url_for('tasks.add_comment', task_id=task.id) }}" aria-label="Add comment">
+<form class="stack" method="post" action="{{ url_for('tasks.add_comment', task_id=task.id) }}" novalidate aria-label="Add comment">
   <div class="stack">
     <label for="author_id">Author</label>
-    <select class="select" id="author_id" name="author_id"{% if errors.author_id %} aria-invalid="true" aria-describedby="author_id-error"{% endif %}>
+    <select class="select" id="author_id" name="author_id" required{% if errors.author_id %} aria-invalid="true" aria-describedby="author_id-error"{% endif %}>
       <option value=""{% if not values.author_id %} selected{% endif %}>Select an author</option>
       {% for member in members %}
       <option value="{{ member.id }}"{% if values.author_id|string == member.id|string %} selected{% endif %}>{{ member.name }}</option>
@@ -138,7 +148,7 @@
   </div>
   <div class="stack">
     <label for="body">Comment</label>
-    <textarea class="textarea" id="body" name="body" rows="4" maxlength="{{ FIELD_LIMITS.comment_body }}"{% if errors.body %} aria-invalid="true" aria-describedby="body-error"{% endif %}>{{ values.body|default('', true) }}</textarea>
+    <textarea class="textarea" id="body" name="body" rows="4" maxlength="{{ FIELD_LIMITS.comment_body }}" required{% if errors.body %} aria-invalid="true" aria-describedby="body-error"{% endif %}>{{ values.body|default('', true) }}</textarea>
     {{ field_error(errors, 'body') }}
   </div>
   <div class="row">

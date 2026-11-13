@@ -1085,6 +1085,58 @@ def test_the_deadline_field_is_described_by_its_hint(seeded_client, app) -> None
     assert 'id="deadline-hint"' in rejected
 
 
+# Deadline text that no date input can display, one shape per kind: text that does
+# not parse at all, and three forms ``date.fromisoformat`` reads but the product does
+# not store -- the basic form, an ISO week date, a date with a time part. The last
+# three are what makes the echo's own condition worth testing: the parser rejects them
+# by their shape alone, so the field is both flagged and unable to hold the entry.
+UNSHOWABLE_DEADLINES = (
+    pytest.param("not-a-date", id="unreadable"),
+    pytest.param("20261113", id="basic-form"),
+    pytest.param("2026-W43-1", id="iso-week-date"),
+    pytest.param("2026-11-13 14:00", id="date-with-a-time-part"),
+)
+
+
+@pytest.mark.parametrize("deadline", UNSHOWABLE_DEADLINES)
+def test_a_rejected_deadline_is_echoed_beside_the_field(
+    seeded_client, app, deadline: str
+) -> None:
+    """A deadline the date control cannot display comes back stated beside the field.
+
+    HTML defines a date input's value as empty unless it is a valid date string, so the
+    submitted text a rejection carries reaches the control and renders blank -- the one
+    field of the five whose entry a re-render would otherwise lose. The form therefore
+    states the entry back in its own paragraph, gives that paragraph an id, and adds the
+    id to the control's ``aria-describedby`` after the message, so what was typed is
+    still on the page and announced with the field it belongs to.
+
+    The value attribute is asserted as well: it is left empty for this text, because a
+    date input is required to ignore a value it cannot display, so the paragraph is the
+    one place the entry is carried instead of an attribute the control would discard.
+    """
+    before = task_count(app)
+    data = {**valid_task_form(app), "deadline": deadline}
+
+    response = seeded_client.post("/tasks", data=data)
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert task_count(app) == before
+    assert input_value(body, "deadline") == ""
+
+    echoed = re.search(r'<p id="deadline-submitted">(.*?)</p>', body, re.DOTALL)
+    assert echoed is not None, "the rejected deadline was not echoed beside the field"
+    assert deadline in unescape(echoed.group(1))
+
+    described = tag_attributes(body, "input", "deadline")
+    assert (
+        described.get("aria-describedby")
+        == "deadline-error deadline-submitted deadline-hint"
+    )
+    assert described.get("aria-invalid") == "true"
+
+
 def test_create_accepts_a_deadline_after_the_project_end(seeded_client, app) -> None:
     """The project's end date describes the project, not a limit on its tasks."""
     end = date.fromisoformat(project_end_iso())

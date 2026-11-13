@@ -25,18 +25,21 @@
   in partials/_field_errors.html: `error_summary` above the form lists every
   problem at once, and `field_error(errors, 'title')` renders the one sentence
   beside that field, owning the `<field>-error` id a control points at with
-  `aria-describedby`. The one sentence this file writes itself is the deadline's
-  hint, which states how to enter a date rather than what the parser will accept;
-  the hint's id is in that control's `aria-describedby` on every render, and only
-  the error id joins it when the field is flagged.
+  `aria-describedby`. The sentences this file writes itself are the deadline's: its
+  hint states how to enter a date rather than what the parser will accept, and its
+  echo states a rejected entry back because the date input cannot hold it. The
+  hint's id is in that control's `aria-describedby` on every render; the error id
+  joins it when the field is flagged, and so does the echo's id when the submission
+  holds text this field could not show.
 
   The three status options are the closed set of app/models.py in the schema's
   order, their text coming from the `status_label` filter so STATUS_LABELS stays
   the single source of the words. The assignee select's first option is the empty
   value labelled "Unassigned", and that empty value is how an assignment is
   cleared -- the parser reads it as `None` rather than as a missing member. The
-  deadline is a plain date input round-tripping the stored `YYYY-MM-DD` text; no
-  date is parsed or formatted here.
+  deadline is a plain date input round-tripping the stored `YYYY-MM-DD` text: the
+  `format_date` filter is consulted only to recognise text the field cannot show,
+  and no date is reformatted for display here.
 
   `required` and `maxlength` are declared for semantics and for the browser's
   convenience, and `novalidate` on the form makes sure the application's own
@@ -102,8 +105,21 @@
 
     <div class="stack">
       <label for="deadline">Deadline</label>
-      <input class="input" type="date" id="deadline" name="deadline" value="{{ values.deadline|default('', true) }}" aria-describedby="{% if errors and errors.get('deadline') %}deadline-error {% endif %}deadline-hint"{% if errors and errors.get('deadline') %} aria-invalid="true"{% endif %}>
+      {# A date input shows a full YYYY-MM-DD date and nothing else: handed any other
+         text it renders empty, so a rejected entry would be lost from the one control
+         that cannot hold it. `deadline_submitted` is the text the reviewer sent and
+         `deadline_unshowable` is true exactly when that text is one the field cannot
+         show, which is the case the echo below states back beside the field. The value
+         attribute is withheld for that text: a date input is required to ignore a value
+         it cannot display, so writing it there would put an invalid value in the
+         document and still show nothing. #}
+      {% set deadline_submitted = values.deadline|default('', true) %}
+      {% set deadline_unshowable = deadline_submitted and (not deadline_submitted|format_date or deadline_submitted|length != 10 or deadline_submitted[4] != '-' or deadline_submitted[7] != '-') %}
+      <input class="input" type="date" id="deadline" name="deadline" value="{% if not deadline_unshowable %}{{ deadline_submitted }}{% endif %}" aria-describedby="{% if errors and errors.get('deadline') %}deadline-error {% endif %}{% if deadline_unshowable %}deadline-submitted {% endif %}deadline-hint"{% if errors and errors.get('deadline') %} aria-invalid="true"{% endif %}>
       {{ field_error(errors, 'deadline') }}
+      {% if deadline_unshowable %}
+      <p id="deadline-submitted">You entered &ldquo;{{ deadline_submitted }}&rdquo;. This field shows a calendar date only, so the date must be entered again.</p>
+      {% endif %}
       <p id="deadline-hint">Optional. Pick a date with the calendar button, or type it in the order the field's segments show.</p>
     </div>
 
