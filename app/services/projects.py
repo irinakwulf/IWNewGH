@@ -20,9 +20,10 @@ Three conventions this module follows, and the reason for each:
   ``app.validation`` and ``app.templating`` already agree on the format, so the
   values pass through unchanged instead of being parsed and reformatted here.
 * The return value is the row that was just written, re-read from the database,
-  not a dataclass assembled from the input. The caller confirms the save and sends
-  the reviewer to a page that reads the database again, so the timestamps it shows
-  must be the stored ones rather than values invented at the call site.
+  not a dataclass assembled from the input. The write itself is one statement, so
+  that re-read is the only read a save makes. The caller confirms the save and
+  sends the reviewer to a page that reads the database again, so the timestamps it
+  shows must be the stored ones rather than values invented at the call site.
 * Nothing here validates and nothing here decides wording. The length limits and
   the rule that ``end_date`` cannot precede ``start_date`` live in
   ``app.validation``, which also owns the messages; this layer receives accepted
@@ -37,7 +38,8 @@ neither opens nor closes a connection and no user string can reach SQL as text.
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from app.db import get_db
 from app.models import Project
@@ -56,18 +58,19 @@ _SELECT_PROJECT_SQL = (
     " FROM project WHERE id = ?"
 )
 
-# The insert names id explicitly and leaves created_at/updated_at to the column
-# defaults, which the schema defines as datetime('now') in UTC.
-_INSERT_PROJECT_SQL = (
+# One statement writes the record: it inserts row 1 and, when that row is already
+# there, updates the four editable columns instead. created_at is absent from the
+# DO UPDATE list, so it keeps the moment the record was first written while
+# updated_at moves; the insert still relies on the column defaults. Because no
+# read decides between an INSERT and an UPDATE, a save cannot observe an empty
+# table and then collide with a concurrent save on the primary key.
+# ON CONFLICT ... DO UPDATE requires SQLite 3.24 or later (3.45.1 here).
+_UPSERT_PROJECT_SQL = (
     "INSERT INTO project (id, name, description, start_date, end_date)"
     " VALUES (?, ?, ?, ?, ?)"
-)
-
-# Every mutation refreshes updated_at; created_at keeps the moment the record was
-# first written.
-_UPDATE_PROJECT_SQL = (
-    "UPDATE project SET name = ?, description = ?, start_date = ?, end_date = ?,"
-    " updated_at = datetime('now') WHERE id = ?"
+    " ON CONFLICT(id) DO UPDATE SET name = excluded.name,"
+    " description = excluded.description, start_date = excluded.start_date,"
+    " end_date = excluded.end_date, updated_at = datetime('now')"
 )
 
 
@@ -87,6 +90,12 @@ def get_project() -> Project | None:
 
 def save_project(values: Mapping[str, Any]) -> Project:
     """Insert the project row, or update row 1 when it already exists.
+
+    One statement does either -- ``INSERT ... ON CONFLICT (id) DO UPDATE`` -- so
+    nothing reads the table first, and two concurrent saves cannot both observe an
+    empty project and then collide on the primary key. ``created_at`` keeps the
+    moment the record was first written, because the conflict clause does not name
+    it.
 
     Args:
         values: The mapping ``app.validation.parse_project_form`` produces on
@@ -113,10 +122,7 @@ def save_project(values: Mapping[str, Any]) -> Project:
         values["start_date"],
         values["end_date"],
     )
-    if get_project() is None:
-        connection.execute(_INSERT_PROJECT_SQL, (_PROJECT_ID, *parameters))
-    else:
-        connection.execute(_UPDATE_PROJECT_SQL, (*parameters, _PROJECT_ID))
+    connection.execute(_UPSERT_PROJECT_SQL, (_PROJECT_ID, *parameters))
     connection.commit()
 
     row = connection.execute(_SELECT_PROJECT_SQL, (_PROJECT_ID,)).fetchone()

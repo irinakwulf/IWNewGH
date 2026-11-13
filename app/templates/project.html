@@ -25,8 +25,10 @@
 
   Nothing here is the control for a rule. The length bounds, the date formats and the
   rule that the end date cannot precede the start date live in app/validation.py; the
-  required, maxlength and rows attributes below only save a round trip for a reviewer
-  whose browser enforces them.
+  required, maxlength and rows attributes below are convenience only, and `novalidate`
+  on the form makes sure the parser's own messages are what a reviewer sees: an empty
+  name or an unparseable date must reach the parser and come back beside its field,
+  with the summary above the form, rather than being stopped by a browser bubble.
 
   The form posts to a URL built by url_for, so no target arrives from the request, and
   it carries no anti-forgery token: the application holds no credential to forge and is
@@ -67,7 +69,7 @@
   </div>
   {% endif %}
   {{ error_summary(errors) }}
-  <form method="post" action="{{ url_for('project.view') }}">
+  <form method="post" action="{{ url_for('project.view') }}" novalidate>
     <div class="stack">
       <div>
         <label for="name">Name</label>

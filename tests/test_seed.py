@@ -1,22 +1,30 @@
 """Tests for the sample dataset in :mod:`seed`: its idempotency and its coverage.
 
-The module exercises the loader directly, with no Flask application and no
-application context anywhere in it: ``seed`` opens its own connection to the path
-it is handed, and the tests do the same to read the rows back. Both facts
-together are the proof that the loader stays independent of application wiring,
-which is what lets the ``seed-db`` command and the test fixtures share it.
+The loader is exercised directly, with no Flask application and no application
+context: ``seed`` opens its own connection to the path it is handed, and the tests
+do the same to read the rows back. That independence is what lets the ``seed-db``
+command and the test fixtures share it.
 
-Every expected value is derived from :data:`seed.SAMPLE_DATA` -- the row counts,
-the summary line the loader prints, the members of each deadline bucket -- so the
-dataset may grow or shrink without this module restating one of its numbers, and
-a failure here means the loader and the literal disagree rather than that a
-fixture was edited.
+The one thing that is driven through the application is the pair of commands the
+application registers on it -- ``init-db`` and ``seed-db`` -- through Flask's own
+CLI runner, because those are the entry points the README and the plan tell a
+reviewer to run and a broken registration would otherwise leave the suite green.
+
+Every expected value about the dataset is derived from :data:`seed.SAMPLE_DATA`
+-- the row counts, the summary line the loader prints, the members of each
+deadline bucket -- so the dataset may grow or shrink without this module
+restating one of its numbers, and a failure here means the loader and the
+literal disagree rather than that a fixture was edited. The only literal
+expectations are the lines the two commands themselves print, which are asserted
+as the contract they are.
 """
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 import sqlite3
+import sys
 from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
@@ -43,6 +51,14 @@ DEADLINE_BUCKETS = ("overdue", "today", "week", "none")
 
 # The four tables the loader writes, in the order the dataset is inserted.
 TABLE_NAMES = ("project", "member", "task", "comment")
+
+# What the two documented commands report. Each is the line a reviewer reads at the
+# terminal, so it is asserted as the contract it is rather than as anything derived:
+# a command that stopped saying what it did would fail here.
+INIT_DB_MESSAGE = "Initialized the database."
+MISSING_SEED_MESSAGE = (
+    "seed.py was not found at the repository root; run this command from there."
+)
 
 
 def sample_row_counts() -> dict[str, int]:
@@ -350,3 +366,150 @@ def test_seeded_comments_match_the_sample_data(
         for row in file_connection.execute("SELECT created_at FROM comment")
     ]
     assert len(set(timestamps)) == expected_comments
+
+
+# --------------------------------------------------------------------------
+# The two commands the application registers: the documented way in, driven
+# through Flask's own CLI runner rather than by calling the loader directly.
+# --------------------------------------------------------------------------
+
+
+def refuse_the_import_of_seed(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Make ``from seed import seed_database`` fail, naming the module ``name``.
+
+    ``seed`` is dropped from ``sys.modules`` as well as refused, because the
+    command's lazy import would otherwise find the copy this module already
+    imported and succeed. Only the top-level ``seed`` name is refused, so every
+    other import the command makes still resolves, and ``monkeypatch`` restores
+    both the module and ``__import__`` when the test ends.
+
+    Args:
+        monkeypatch: The test's patcher.
+        name: The module name the failure reports, which is ``"seed"`` for a
+            checkout that holds no ``seed.py`` and anything else for an import
+            that breaks inside it.
+    """
+    real_import = builtins.__import__
+
+    def import_refusing_seed(module: str, *args: object, **kwargs: object) -> object:
+        if module == "seed":
+            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        return real_import(module, *args, **kwargs)
+
+    monkeypatch.delitem(sys.modules, "seed", raising=False)
+    monkeypatch.setattr(builtins, "__import__", import_refusing_seed)
+
+
+def test_init_db_command_clears_the_database_to_an_empty_schema(app) -> None:
+    """The documented ``init-db`` leaves every table present and holding no rows.
+
+    The database is seeded first, so the command has data to clear: a registration
+    that had broken, or a body that did nothing, would leave those rows behind and
+    fail here. The four tables are asserted present as well, because rebuilding the
+    schema is the other half of what the command promises.
+    """
+    database = app.config["DATABASE"]
+    seed.seed_database(database)
+
+    result = app.test_cli_runner().invoke(args=["init-db"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == INIT_DB_MESSAGE
+    with contextlib.closing(open_connection(database)) as connection:
+        tables = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        assert set(TABLE_NAMES) <= tables, f"tables left behind: {sorted(tables)}"
+        for table in TABLE_NAMES:
+            total = connection.execute(
+                f"SELECT COUNT(*) AS total FROM {table}"
+            ).fetchone()
+            assert int(total["total"]) == 0, f"{table} rows survived init-db"
+
+
+def test_seed_db_command_loads_the_sample_dataset(app) -> None:
+    """The documented ``seed-db`` writes the whole dataset and prints its summary."""
+    database = app.config["DATABASE"]
+    expected = sample_row_counts()
+
+    result = app.test_cli_runner().invoke(args=["seed-db"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == expected_summary_line()
+    with contextlib.closing(open_connection(database)) as connection:
+        for table in TABLE_NAMES:
+            counted = count_rows(connection, table)
+            assert counted == (expected[table], expected[table]), (
+                f"{table} after seed-db"
+            )
+
+
+def test_seed_db_command_is_idempotent(app) -> None:
+    """Running the command twice leaves one dataset and repeats the same summary.
+
+    The rows are read back after each run, so the second run is compared against
+    the first rather than against a figure that could hide an append: ``MAX(id)``
+    equals the count because ids restart from one in a recreated table.
+    """
+    database = app.config["DATABASE"]
+    expected = sample_row_counts()
+    runner = app.test_cli_runner()
+    observed: list[dict[str, tuple[int, int]]] = []
+
+    for _ in range(2):
+        result = runner.invoke(args=["seed-db"])
+        assert result.exit_code == 0, result.output
+        assert result.output.strip() == expected_summary_line()
+        with contextlib.closing(open_connection(database)) as connection:
+            observed.append(
+                {table: count_rows(connection, table) for table in TABLE_NAMES}
+            )
+
+    for run, counts in enumerate(observed, start=1):
+        for table in TABLE_NAMES:
+            assert counts[table] == (expected[table], expected[table]), (
+                f"{table} after run {run}"
+            )
+
+
+def test_seed_db_command_reports_a_missing_seed_module(app, monkeypatch) -> None:
+    """A command run with no ``seed.py`` names the fix instead of a traceback.
+
+    The failure is the missing ``seed`` module itself, which is what a checkout
+    without ``seed.py`` looks like from inside the command. The command turns it
+    into the message a reviewer can act on, so the exit is non-zero and the
+    terminal reads the remedy rather than a stack trace.
+    """
+    refuse_the_import_of_seed(monkeypatch, "seed")
+
+    result = app.test_cli_runner().invoke(args=["seed-db"])
+
+    assert result.exit_code == 1
+    assert MISSING_SEED_MESSAGE in result.output
+    assert "Traceback" not in result.output
+
+
+def test_seed_db_command_keeps_a_broken_seed_import_a_real_error(
+    app, monkeypatch
+) -> None:
+    """Only a missing ``seed`` module is reported as a wrong working directory.
+
+    An import that breaks for any other reason -- a dependency inside ``seed.py``
+    it cannot find, say -- is a real error, and answering it with "run this from
+    the repository root" would send a reviewer looking in the wrong place. The
+    failure is raised from inside the import of ``seed`` but names another module,
+    which is exactly that case, and it is then the exception the test sees rather
+    than a converted command error.
+    """
+    missing = "seed_dependency_that_is_not_installed"
+    refuse_the_import_of_seed(monkeypatch, missing)
+    runner = app.test_cli_runner()
+
+    with pytest.raises(ModuleNotFoundError) as raised:
+        runner.invoke(args=["seed-db"], catch_exceptions=False)
+
+    assert raised.value.name == missing
+    assert MISSING_SEED_MESSAGE not in str(raised.value)

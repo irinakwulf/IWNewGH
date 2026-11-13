@@ -53,6 +53,7 @@ from app.db import get_db
 
 MSG_ENTER_PROJECT_NAME = "Enter a project name."
 MSG_PROJECT_NAME_TOO_LONG = "Project names are limited to 120 characters."
+MSG_DESCRIPTION_TOO_LONG = "Descriptions are limited to 2000 characters."
 MSG_INVALID_DATE = "Enter a valid date (YYYY-MM-DD)."
 MSG_END_DATE_BEFORE_START_DATE = "End date cannot be earlier than the start date."
 MSG_DEADLINE_BEFORE_PROJECT_START = (
@@ -69,6 +70,11 @@ SUBMIT_LABEL = "Save project details"
 # The name bound app/validation.py enforces, and a name one character past it.
 PROJECT_NAME_LIMIT = 120
 LONG_NAME = "N" * (PROJECT_NAME_LIMIT + 1)
+
+# The description bound the same module enforces, and a description one character
+# past it: the field has no required rule, so the length is the only way it rejects.
+DESCRIPTION_LIMIT = 2000
+LONG_DESCRIPTION = "D" * (DESCRIPTION_LIMIT + 1)
 
 # The screen under test, and the id of the one record the schema allows.
 PROJECT_PATH = "/project"
@@ -342,6 +348,11 @@ REJECTED_PROJECT_FORMS = (
     pytest.param({"name": ""}, MSG_ENTER_PROJECT_NAME, id="blank-name"),
     pytest.param({"name": "   "}, MSG_ENTER_PROJECT_NAME, id="whitespace-name"),
     pytest.param({"name": LONG_NAME}, MSG_PROJECT_NAME_TOO_LONG, id="name-too-long"),
+    pytest.param(
+        {"description": LONG_DESCRIPTION},
+        MSG_DESCRIPTION_TOO_LONG,
+        id="description-too-long",
+    ),
     pytest.param({"start_date": ""}, MSG_INVALID_DATE, id="blank-start-date"),
     pytest.param(
         {"start_date": day_first(offset_iso(5))},

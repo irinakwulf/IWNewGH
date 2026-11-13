@@ -52,7 +52,7 @@
 {% extends "base.html" %}
 {% from "partials/_field_errors.html" import error_summary, field_error %}
 
-{% block title %}{% if task %}Edit task{% else %}New task{% endif %}{% endblock %}
+{% block title %}{% if task %}Edit task · Taskboard{% else %}New task · Taskboard{% endif %}{% endblock %}
 
 {% block content %}
   <h1>{% if task %}Edit task{% else %}New task{% endif %}</h1>

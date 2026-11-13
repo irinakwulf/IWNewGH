@@ -28,8 +28,9 @@ orphan row.
 
 from __future__ import annotations
 
+import re
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -63,6 +64,10 @@ BACK_TO_DASHBOARD_TEXT = "Back to the dashboard"
 # The bound the body rule enforces, named once so the boundary case states the
 # length it tests instead of a bare number.
 COMMENT_BODY_LIMIT = 1000
+
+# The shape SQLite's ``datetime('now')`` default writes -- UTC text, fixed width,
+# one-second resolution -- which is what an "author and timestamp" row must hold.
+STORED_TIMESTAMP_PATTERN = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}"
 
 # The body a rejection case posts and then expects to find preserved in the
 # textarea: one sentence, carrying no markup, so it matches the rendered page
@@ -239,6 +244,45 @@ def row_markup(html: str, title: str) -> str:
     return html[start:end]
 
 
+def comment_block(html: str, body: str) -> str:
+    """Return the list-item markup the page renders for the comment ``body``.
+
+    A comment renders as one ``<li>`` holding its author, its timestamp and its
+    body, so the slice from that item's opening tag to its closing tag is the whole
+    of that comment and nothing of the ones around it. Scoping an assertion to it
+    is what keeps a timestamp from being found on a different comment's line: the
+    page lists several comments, so presence anywhere in the page proves nothing
+    about the comment that was just written.
+    """
+    end = position_of(html, body)
+    start = html.rfind("<li>", 0, end)
+    assert start != -1, f"no list item opens the comment carrying {body!r}"
+    close = html.find("</li>", end)
+    assert close != -1, f"the comment carrying {body!r} has no closing tag"
+    return html[start:close]
+
+
+def format_stored_timestamp(value: str) -> str:
+    """Render a stored timestamp the way the detail page must show it.
+
+    ``app.templating.format_datetime`` is deliberately *not* called here: asking
+    the renderer under test to produce its own expectation proves nothing, because
+    a change to its format would move the page and the expectation together. The
+    stored ``YYYY-MM-DD HH:MM:SS`` text is parsed against that exact layout and
+    re-assembled independently -- unpadded day, a three-letter English month, and a
+    zero-padded 24-hour clock -- which is the shape a rendered comment timestamp
+    must have. ``strftime("%b")`` rather than the application's month table keeps
+    the expectation out of the module it checks, and the interface ships in English
+    only, so the host locale changing the month name is itself a failure worth
+    seeing.
+    """
+    moment = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    month = moment.strftime("%b")
+    return (
+        f"{moment.day} {month} {moment.year}, {moment.hour:02d}:{moment.minute:02d}"
+    )
+
+
 def detail_html(client: FlaskClient, task_id: int) -> str:
     """Return the rendered detail page for ``task_id``, asserting it was served."""
     response = client.get(f"/tasks/{task_id}")
@@ -336,16 +380,28 @@ def test_a_valid_comment_is_stored_and_listed_last(
     """A valid post redirects, confirms, appends to the conversation and stores the row.
 
     Three things are asserted beyond the response: the row count rose by exactly
-    one, the stored row carries the posted author, body and parent task, and the new
-    comment is rendered after every comment that was already there. The last of
-    those is the append behaviour a reviewer checks by hand, and it is what proves
-    the ordering is by ``created_at`` rather than by nothing at all.
+    one, the stored row carries the posted author, body, parent task and the
+    timestamp the database wrote for it, and the new comment is rendered after every
+    comment that was already there. The last of those is the append behaviour a
+    reviewer checks by hand, and it is what proves the ordering is by ``created_at``
+    rather than by nothing at all.
+
+    The timestamp is asserted on both sides of the write because the AAP's clause is
+    about both: the row must hold one, and the page must show it beside the comment's
+    author. Only the seeded conversation's timestamps were observed otherwise, which
+    would let a write path that stored no timestamp at all -- or one the page never
+    rendered -- pass, so the stored value is checked for the shape SQLite's default
+    writes and for being later than the newest comment already in the database, and
+    the rendered value is derived from that stored text by this module's own
+    formatter and looked for inside the posted comment's own list item.
     """
     task = task_carrying_two_comments()
     task_id = task_id_for(app, task["title"])
     author = first_member(app)
     body = "Read through the notes; happy with the spacing now."
     count_before = comment_count(app)
+    newest_seeded = query_scalar(app, "SELECT MAX(created_at) FROM comment")
+    assert newest_seeded, "the seeded comment table holds no timestamp"
 
     response = seeded_client.post(
         f"/tasks/{task_id}/comments",
@@ -364,13 +420,25 @@ def test_a_valid_comment_is_stored_and_listed_last(
     assert comment_count(app) == count_before + 1
     stored = query_one(
         app,
-        "SELECT task_id, author_id, body FROM comment WHERE body = ?",
+        "SELECT task_id, author_id, body, created_at FROM comment WHERE body = ?",
         (body,),
     )
     assert stored is not None, "the posted comment was not stored"
     assert stored["task_id"] == task_id
     assert stored["author_id"] == author.id
     assert stored["body"] == body
+
+    created_at = stored["created_at"]
+    assert created_at, "the stored comment carries no timestamp"
+    assert re.fullmatch(STORED_TIMESTAMP_PATTERN, created_at), created_at
+    # Both values are fixed-width UTC text, so a string comparison is chronological:
+    # the new comment was written after every comment the seed loaded. The seed's
+    # newest comment is at least a day old, so a row written now is always later.
+    assert created_at > newest_seeded, created_at
+
+    block = comment_block(html, body)
+    assert author.name in block
+    assert format_stored_timestamp(created_at) in block
 
 
 def test_the_list_comment_count_rises_by_one(

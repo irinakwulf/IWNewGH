@@ -13,6 +13,12 @@ __pycache__/
 *$py.class
 *.so
 
+# Distribution build output: a `pip install .` build of this project, which the
+# [project] table in pyproject.toml makes pip run through the setuptools backend
+*.egg-info/
+build/
+dist/
+
 # Test and coverage output
 .coverage
 .coverage.*

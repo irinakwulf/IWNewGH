@@ -23,10 +23,14 @@ markup this module depends on is the contract the dashboard's own docstring fixe
 -- the four card labels, their counts and their hrefs, the create control and the
 two empty states. Everything else in the markup may change freely.
 
-The module talks only to Flask's test client, through the ``seeded_client`` and
-``client`` fixtures of ``tests/conftest.py``. It imports no Flask module and opens
-no application context; the one read of the database it needs, the id of a seeded
-task, is a parameterized query over the ``db_path`` fixture.
+The dashboard's failure path is asserted here too: a raise from the service the
+view calls answers with the 500 page, so the delivery of "the error pages" is a
+check rather than a reading of the template.
+
+The module talks only to Flask's test client, through the ``seeded_client``,
+``client`` and ``app`` fixtures of ``tests/conftest.py``. It imports no Flask module
+and opens no application context; the one read of the database it needs, the id of a
+seeded task, is a parameterized query over the ``db_path`` fixture.
 """
 
 from __future__ import annotations
@@ -63,6 +67,11 @@ CARD_CONTRACT: dict[str, tuple[str, str | None]] = {
 # The unfiltered task list every Total card opens, and the path the three status
 # cards append their query to.
 TASK_LIST_PATH = "/tasks"
+
+# Where the dashboard itself is served. It is what the 500 page's one link offers,
+# and it is why that link is read from its own anchor rather than from the shell's
+# navigation, which links home from every page.
+DASHBOARD_PATH = "/"
 
 # The create form the dashboard's create control opens. Written down rather than
 # derived from the application, because this module imports no Flask and opens no
@@ -105,6 +114,11 @@ MONTHS: tuple[str, ...] = (
 # successful render is.
 UNEXPECTED_FAILURE_HEADING = "Internal Server Error"
 
+# The 500 page's way back to the dashboard. Matched with its own anchor so the
+# classes and attribute order stay the template's business, and so a page that only
+# carried the shell's navigation would not pass for offering a way back.
+BACK_TO_DASHBOARD_TEXT = "Back to the dashboard"
+
 # One card: an anchor carrying the ``metric`` class. Matched by pattern rather
 # than by exact markup, so attribute order and the elements inside the card are
 # the template's business.
@@ -121,6 +135,18 @@ _ANCHOR = re.compile(r"<a\b[^>]*>.*?</a>", re.S)
 
 # What the create form's post redirects to: the new task's own page.
 _TASK_DETAIL_LOCATION = re.compile(r"/tasks/\d+")
+
+# The 500 page's back link: the anchor whose text is BACK_TO_DASHBOARD_TEXT, with
+# its href captured so the destination is checked rather than the phrase alone.
+_BACK_TO_DASHBOARD_LINK = re.compile(
+    r'<a\b[^>]*href="(?P<href>[^"]*)"[^>]*>\s*' + BACK_TO_DASHBOARD_TEXT + r"\s*</a>"
+)
+
+# A heading and its text, so the failure page's visible heading is read from the
+# heading rather than from the document title, which carries the same phrase: an
+# error page whose title was right and whose heading was wrong would still leave
+# the visitor without the sentence that says what happened.
+_HEADING = re.compile(r"<h1\b[^>]*>(?P<text>[^<]*)</h1>", re.S)
 
 
 # --------------------------------------------------------------------------
@@ -566,3 +592,60 @@ def test_unassigned_and_undated_tasks_are_counted_like_any_other(
     post_new_task(seeded_client)
     _, grown = read_dashboard(seeded_client)
     assert counts_from(grown)["total"] == counts["total"] + 1
+
+
+# --------------------------------------------------------------------------
+# The failure path: an unexpected error answers with the 500 page, inside the
+# shell and with nothing of the exception behind it.
+# --------------------------------------------------------------------------
+
+
+def test_an_unhandled_failure_renders_the_500_page_inside_the_shell(
+    app, monkeypatch
+):
+    """An unhandled failure answers with the 500 page, and with nothing of itself.
+
+    The dashboard reads its numbers through one service call, so a raise there is
+    the unexpected failure the 500 handler exists for. The response is checked for
+    the page's own heading, its one way back to the dashboard and the shell around
+    it, and then for the absence of the failure that produced it: a page that
+    answered 500 while printing the exception's message would still be handing the
+    visitor the application's internals.
+    """
+    failure = f"dashboard metrics failed {uuid.uuid4().hex}"
+
+    def failing_metrics():
+        """Stand in for the service by raising, as an unexpected bug would."""
+        raise RuntimeError(failure)
+
+    # The view calls the service through the name the blueprint module imported, so
+    # that binding is the one replaced: patching app.services.metrics would leave
+    # the dashboard pointed at the working function.
+    monkeypatch.setattr("app.blueprints.dashboard.dashboard_metrics", failing_metrics)
+    # The ``app`` fixture builds a TESTING application, and a testing application
+    # hands an unhandled exception to its caller instead of rendering the page for
+    # it. A served application does the opposite, which is the case asserted here.
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+
+    response = app.test_client().get(DASHBOARD_PATH)
+    body = response.get_data(as_text=True)
+
+    assert response.status_code == 500
+    # The heading is built from the exception Flask handled -- its name and its
+    # code -- so it is checked the same way rather than against a copied phrase,
+    # and it is read from the single <h1> the page renders: the <title> carries
+    # the same words, so the phrase alone would pass for a page whose heading had
+    # broken.
+    headings = [match.group("text").strip() for match in _HEADING.finditer(body)]
+    assert headings == [f"{UNEXPECTED_FAILURE_HEADING} (500)"]
+    assert BACK_TO_DASHBOARD_TEXT in body
+    back_link = _BACK_TO_DASHBOARD_LINK.search(body)
+    assert back_link is not None, "the 500 page offers no way back to the dashboard"
+    assert back_link.group("href") == DASHBOARD_PATH
+    # Inside the shell, which is what keeps every other screen one click away: the
+    # navigation's Tasks link is rendered by the shell alone.
+    assert f'href="{TASK_LIST_PATH}"' in body
+    # And the failure itself stays out of the response, so the page says what
+    # happened without naming what broke.
+    assert failure not in body
+    assert "RuntimeError" not in body

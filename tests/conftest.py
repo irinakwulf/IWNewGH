@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 
 import seed
 from app import create_app
@@ -53,13 +54,13 @@ def app(db_path: str) -> Iterator[Flask]:
 
 
 @pytest.fixture
-def client(app: Flask):
+def client(app: Flask) -> FlaskClient:
     """Return a test client for the unseeded application."""
     return app.test_client()
 
 
 @pytest.fixture
-def seeded_client(app: Flask, db_path: str):
+def seeded_client(app: Flask, db_path: str) -> FlaskClient:
     """Return a test client whose application shares one freshly seeded database."""
     seed.seed_database(db_path)
     return app.test_client()

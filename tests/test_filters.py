@@ -30,13 +30,18 @@ parameters that were fine, and the absence of a rendered list -- a page that ret
 What is deliberately not asserted: that any select submits itself when its value
 changes (the application ships no script, so there is nothing to test), the exact
 shape of the page, and any literal count, member id or calendar date.
+
+This module also carries the direct unit cases for the four Jinja filters in
+:mod:`app.templating` -- ``format_date``, ``format_datetime``, ``status_label`` and
+``deadline_state`` -- because those filters are pure functions whose template call
+sites guard every input they receive.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import unescape
 
 import pytest
@@ -45,7 +50,7 @@ from flask.testing import FlaskClient
 from werkzeug.exceptions import BadRequest
 
 import seed
-from app import models, validation
+from app import models, templating, validation
 from app.services import members
 from app.services import tasks as task_service
 
@@ -814,3 +819,183 @@ def test_every_applied_filter_stays_selected_together(
 
     for control, value in submitted.items():
         assert selected_filter_values(html, control) == {value}
+
+
+# ---------------------------------------------------------------------------
+# The four Jinja filters, exercised directly.
+#
+# These cases are direct because the filters are pure functions of
+# :mod:`app.templating` whose template call sites guard every input: a task without a
+# deadline reaches no date filter, a row without a timestamp renders no cell, and a
+# status always arrives from the closed set. Their defensive paths -- no value, blank
+# text, an unparseable value, a ``date`` or ``datetime`` object where text was
+# expected -- are therefore unreachable through HTTP, so nothing at that level could
+# assert them. What they must render is the format the interface states: ``26 Oct
+# 2026`` for a date, ``26 Oct 2026, 14:03`` for a timestamp, ``Pending`` / ``In
+# progress`` / ``Completed`` for a status, and the overdue, today and soon states of a
+# deadline.
+# ---------------------------------------------------------------------------
+
+# Every accepted shape ``format_date`` renders, with the string it must produce. ISO
+# text is the stored form; the ``date`` and ``datetime`` objects are what a column read
+# with a type converter yields; the two time-carrying strings are what a hand-written
+# row holds. January and December prove the month names come from ``MONTHS`` rather
+# than from a locale-sensitive ``strftime``.
+FORMAT_DATE_CASES = [
+    pytest.param("2026-10-26", "26 Oct 2026", id="iso-text"),
+    pytest.param("2026-01-05", "5 Jan 2026", id="january-day-not-zero-padded"),
+    pytest.param("2026-12-31", "31 Dec 2026", id="december"),
+    pytest.param("  2026-10-26  ", "26 Oct 2026", id="surrounding-whitespace"),
+    pytest.param("2026-10-26T14:03:07", "26 Oct 2026", id="iso-text-with-t-separator"),
+    pytest.param(
+        "2026-10-26 14:03:07", "26 Oct 2026", id="iso-text-with-space-separator"
+    ),
+    pytest.param(date(2026, 10, 26), "26 Oct 2026", id="date-object"),
+    pytest.param(datetime(2026, 10, 26, 14, 3, 7), "26 Oct 2026", id="datetime-object"),
+]
+
+# Values no date can be read from. Each must render as an empty string rather than
+# raise, because one unreadable row must not replace a whole page with the error view.
+UNUSABLE_DATE_CASES = [
+    pytest.param(None, id="none"),
+    pytest.param("", id="empty"),
+    pytest.param("   ", id="blank"),
+    pytest.param("not-a-date", id="not-a-date"),
+    pytest.param("31-10-2026", id="wrong-field-order"),
+    pytest.param("2026-13-01", id="month-out-of-range"),
+]
+
+# The same two tables for ``format_datetime``: the clock is 24-hour and zero-padded,
+# the seconds are dropped, and a bare date renders as midnight of that day.
+FORMAT_DATETIME_CASES = [
+    pytest.param("2026-10-26 14:03:07", "26 Oct 2026, 14:03", id="sqlite-text"),
+    pytest.param(
+        "2026-10-26T14:03:07", "26 Oct 2026, 14:03", id="iso-text-with-t-separator"
+    ),
+    pytest.param(
+        "2026-01-05 09:07:59", "5 Jan 2026, 09:07", id="january-clock-zero-padded"
+    ),
+    pytest.param("2026-12-31 23:59:59", "31 Dec 2026, 23:59", id="december"),
+    pytest.param(
+        datetime(2026, 10, 26, 14, 3, 7), "26 Oct 2026, 14:03", id="datetime-object"
+    ),
+    pytest.param(date(2026, 10, 26), "26 Oct 2026, 00:00", id="date-object-midnight"),
+]
+
+UNUSABLE_DATETIME_CASES = [
+    pytest.param(None, id="none"),
+    pytest.param("", id="empty"),
+    pytest.param("   ", id="blank"),
+    pytest.param("not-a-timestamp", id="not-a-timestamp"),
+    pytest.param("2026-13-01 00:00", id="month-out-of-range"),
+]
+
+# The label each value of the closed status set renders, read from the mapping itself so
+# a status added without a label fails here rather than rendering blank on a page.
+STATUS_LABEL_CASES = [
+    pytest.param(status, label, id=status)
+    for status, label in models.STATUS_LABELS.items()
+]
+
+# Statuses the mapping does not know, including its own values in the wrong case: each
+# must be shown as stored, so an unexpected row still says something.
+UNKNOWN_STATUS_CASES = ["archived", "PENDING", "in progress"]
+
+# A deadline's state by its distance in days from today and by the task's status. The
+# last day of the "soon" window is the same THIS_WEEK_END_OFFSET the filter cases above
+# use, so the word beside a deadline and the Due this week filter cannot drift apart.
+DEADLINE_STATE_CASES = [
+    pytest.param(-1, "pending", "overdue", id="yesterday-unfinished"),
+    pytest.param(-1, "completed", "", id="yesterday-completed"),
+    pytest.param(0, "pending", "today", id="today"),
+    *[
+        pytest.param(offset, "pending", "soon", id=f"in-{offset}-days")
+        for offset in range(1, THIS_WEEK_END_OFFSET + 1)
+    ],
+    pytest.param(THIS_WEEK_END_OFFSET + 1, "pending", "", id="a-day-past-the-window"),
+    pytest.param(30, "pending", "", id="a-month-ahead"),
+]
+
+
+@pytest.mark.parametrize(("value", "expected"), FORMAT_DATE_CASES)
+def test_format_date_renders_a_stored_date(value: object, expected: str) -> None:
+    """A date renders as "26 Oct 2026", with the day not zero-padded."""
+    assert templating.format_date(value) == expected
+
+
+@pytest.mark.parametrize("value", UNUSABLE_DATE_CASES)
+def test_format_date_renders_nothing_for_an_unusable_value(value: object) -> None:
+    """An absent or malformed date renders as an empty string, never as an error."""
+    assert templating.format_date(value) == ""
+
+
+@pytest.mark.parametrize(("value", "expected"), FORMAT_DATETIME_CASES)
+def test_format_datetime_renders_a_stored_timestamp(
+    value: object, expected: str
+) -> None:
+    """A timestamp renders as "26 Oct 2026, 14:03", its seconds dropped."""
+    assert templating.format_datetime(value) == expected
+
+
+@pytest.mark.parametrize("value", UNUSABLE_DATETIME_CASES)
+def test_format_datetime_renders_nothing_for_an_unusable_value(value: object) -> None:
+    """An absent or malformed timestamp renders as an empty string."""
+    assert templating.format_datetime(value) == ""
+
+
+@pytest.mark.parametrize(("status", "expected"), STATUS_LABEL_CASES)
+def test_status_label_renders_the_label_of_every_status(
+    status: str, expected: str
+) -> None:
+    """Each status of the closed set renders its own label."""
+    assert templating.status_label(status) == expected
+
+
+@pytest.mark.parametrize("value", UNKNOWN_STATUS_CASES)
+def test_status_label_shows_an_unknown_status_as_its_own_text(value: str) -> None:
+    """A status outside the mapping is shown as stored instead of blanked."""
+    assert templating.status_label(value) == value
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_status_label_renders_nothing_for_a_missing_value(value: str | None) -> None:
+    """A task with no status renders no label rather than the word None."""
+    assert templating.status_label(value) == ""
+
+
+@pytest.mark.parametrize(("offset", "status", "expected"), DEADLINE_STATE_CASES)
+def test_deadline_state_reads_the_deadline_and_the_status(
+    offset: int, status: str, expected: str
+) -> None:
+    """A deadline's state follows its distance from today, unless the work is done."""
+    deadline = (date.today() + timedelta(days=offset)).isoformat()
+
+    assert templating.deadline_state(deadline, status) == expected
+
+
+def test_a_completed_task_is_never_overdue() -> None:
+    """Finished work carries no relative word, even with its deadline behind it.
+
+    This exclusion is the whole reason ``status`` is a parameter rather than a constant,
+    so it is asserted on its own line as well as in the table above: the same deadline
+    reads as overdue for unfinished work and as silence for finished work.
+    """
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    assert templating.deadline_state(yesterday, "completed") == ""
+    assert templating.deadline_state(yesterday, "pending") == "overdue"
+
+
+def test_deadline_state_defaults_to_an_unfinished_task() -> None:
+    """Called with the deadline alone, the state is the deadline's own."""
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+
+    assert templating.deadline_state(yesterday) == "overdue"
+
+
+@pytest.mark.parametrize("deadline", [None, "", "   ", "not-a-date", "2026-13-01"])
+def test_deadline_state_renders_nothing_for_an_unusable_deadline(
+    deadline: str | None,
+) -> None:
+    """No deadline, or one no date can be read from, carries no relative word."""
+    assert templating.deadline_state(deadline) == ""

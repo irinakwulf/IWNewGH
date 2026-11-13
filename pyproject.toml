@@ -19,6 +19,10 @@ source = ["app"]
 
 [tool.coverage.report]
 fail_under = 85
+# Two decimals, so the gate's exit decision compares the total it prints: at the
+# default precision of 0 a total between 84.5% and 85% is rounded up to 85 and
+# the run passes while still reporting the floor as not reached.
+precision = 2
 show_missing = true
 exclude_lines = [
     "pragma: no cover",

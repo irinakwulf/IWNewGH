@@ -32,15 +32,17 @@ Three conventions hold throughout, and each one keeps the module honest:
 from __future__ import annotations
 
 import re
+import sqlite3
 from datetime import date, timedelta
 from html import unescape
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from flask import Flask
 
 import seed
 from app.db import get_db
-from app.models import STATUS_LABELS, TASK_STATUSES
+from app.models import Member, STATUS_LABELS, TASK_STATUSES
 from app.services.members import list_members
 
 # --------------------------------------------------------------------------
@@ -58,11 +60,27 @@ NEW_TASK_DESCRIPTION = "A first draft of the launch note for the mailing list."
 # The longest title the parser accepts, and the bound its message quotes.
 TITLE_LIMIT = 200
 
+# The longest description the parser accepts. One character past it is what the
+# rejected create case posts, to read back app/validation.py's own sentence,
+# "Descriptions are limited to 2000 characters."
+DESCRIPTION_LIMIT = 2000
+
 # The last day of the "due this week" window the deadline filter and the deadline
 # indicator share: today <= deadline <= today + 6. Mirrored here rather than
 # imported so the module states the window it expects and a change to it fails a
 # test instead of being followed silently.
 SOON_WINDOW_DAYS = 6
+
+# The three status labels the interface displays, pinned as literals rather than read
+# from ``app.models.STATUS_LABELS``. That mapping is what the pages render from and
+# what the rest of this module's status assertions compare against, so a typo in it
+# would move the page and the expectation together and no test here would fail. These
+# three words are the contract's own vocabulary, so they are stated once as text.
+STATUS_LABEL_TEXT = {
+    "pending": "Pending",
+    "in_progress": "In progress",
+    "completed": "Completed",
+}
 
 # An id no task and no member holds. The routes parse ids as integers, so the value
 # only has to be one nothing was inserted with.
@@ -93,7 +111,9 @@ _SELECTED = re.compile(r"(?:^|\s)selected(?:\s|$)")
 # --------------------------------------------------------------------------
 
 
-def query_one(app, statement: str, parameters: tuple = ()):
+def query_one(
+    app: Flask, statement: str, parameters: tuple[object, ...] = ()
+) -> sqlite3.Row | None:
     """Run one statement in the application's context and return its row.
 
     Args:
@@ -110,12 +130,12 @@ def query_one(app, statement: str, parameters: tuple = ()):
         return get_db().execute(statement, parameters).fetchone()
 
 
-def task_count(app) -> int:
+def task_count(app: Flask) -> int:
     """Return how many task rows the database currently holds."""
     return int(query_one(app, "SELECT COUNT(*) AS total FROM task")["total"])
 
 
-def task_row(app, task_id: int):
+def task_row(app: Flask, task_id: int) -> sqlite3.Row:
     """Return one stored task row, by column name.
 
     Raises:
@@ -127,21 +147,21 @@ def task_row(app, task_id: int):
     return row
 
 
-def task_id_for(app, title: str) -> int:
+def task_id_for(app: Flask, title: str) -> int:
     """Return the id of the stored task whose title is ``title``."""
     row = query_one(app, "SELECT id FROM task WHERE title = ?", (title,))
     assert row is not None, f"no task row titled {title!r}"
     return int(row["id"])
 
 
-def project_row_id(app) -> int:
+def project_row_id(app: Flask) -> int:
     """Return the id of the single project row."""
     row = query_one(app, "SELECT id FROM project")
     assert row is not None, "the seeded database holds no project row"
     return int(row["id"])
 
 
-def member_for_email(app, email: str):
+def member_for_email(app: Flask, email: str) -> Member:
     """Return the stored member whose email is ``email``.
 
     The member service is the authority on which members exist, so the ids the
@@ -268,7 +288,20 @@ def project_end_iso() -> str:
     return iso_offset(seed.SAMPLE_DATA["project"]["end_offset"])
 
 
-def valid_task_form(app) -> dict:
+def rendered_date(iso_text: str) -> str:
+    """Return a stored ``YYYY-MM-DD`` date in the shape the interface renders it.
+
+    The page shows a date as ``26 Oct 2026`` -- an unpadded day, a three-letter month
+    and a four-digit year -- which is what this reproduces from the stored text alone.
+    The ``format_date`` filter the page calls is deliberately not used: a case that
+    asked the application to format the value would confirm that filter against itself
+    and prove nothing about what the page shows.
+    """
+    day = date.fromisoformat(iso_text)
+    return f"{day.day} {day.strftime('%b')} {day.year}"
+
+
+def valid_task_form(app: Flask) -> dict[str, str]:
     """Return a submission the create form accepts, as the form would post it.
 
     Every value is derived: the assignee is a member the service reports, and the
@@ -477,7 +510,6 @@ def assert_redirects_to(response, path: str) -> None:
     assert location_path(response) == path
 
 
-
 # --------------------------------------------------------------------------
 # The task list.
 # --------------------------------------------------------------------------
@@ -486,8 +518,13 @@ def assert_redirects_to(response, path: str) -> None:
 COLUMNS = ("Title", "Assignee", "Status", "Deadline", "Comments", "Actions")
 
 
-def test_task_list_renders_every_seeded_task(seeded_client) -> None:
-    """The unfiltered list shows one row per seeded task and counts them."""
+def test_task_list_renders_every_seeded_task(seeded_client, app) -> None:
+    """The unfiltered list shows one row per seeded task and counts them.
+
+    Each seeded title is found through the link that opens its detail page and that
+    link is counted, so a task rendered twice fails here; the create control is
+    counted for the same reason, because this screen carries exactly one.
+    """
     titles = [task["title"] for task in seed.SAMPLE_DATA["tasks"]]
 
     response = seeded_client.get("/tasks")
@@ -497,7 +534,11 @@ def test_task_list_renders_every_seeded_task(seeded_client) -> None:
     assert f"<p>{len(titles)} tasks</p>" in body
     for title in titles:
         assert title in body, f"the list omits the seeded task {title!r}"
-    assert "Create task" in body
+        task_id = task_id_for(app, title)
+        assert body.count(f'<a href="/tasks/{task_id}">') == 1, (
+            f"the list does not link the seeded task {title!r} exactly once"
+        )
+    assert body.count("Create task") == 1
 
 
 @pytest.mark.parametrize("column", COLUMNS)
@@ -533,7 +574,7 @@ def test_unseeded_task_list_offers_to_create_the_first_task(client) -> None:
     body = response.get_data(as_text=True)
 
     assert "No tasks yet." in body
-    assert "Create task" in body
+    assert body.count("Create task") == 1
     assert "<table" not in body
 
 
@@ -588,6 +629,11 @@ REJECTED_CREATE_CASES = (
         "Task titles are limited to 200 characters.",
         id="title-too-long",
     ),
+    pytest.param(
+        {"description": "D" * (DESCRIPTION_LIMIT + 1)},
+        "Descriptions are limited to 2000 characters.",
+        id="description-too-long",
+    ),
     pytest.param({"status": "done"}, "Select a valid status.", id="unknown-status"),
     pytest.param(
         {"assignee_id": str(UNKNOWN_ID)},
@@ -606,10 +652,16 @@ REJECTED_CREATE_CASES = (
 def test_rejected_create_rerenders_with_its_message(
     seeded_client, app, overrides: dict, message: str
 ) -> None:
-    """A rejected create answers 200 with the field's message and writes nothing."""
-    before = task_count(app)
+    """A rejected create answers 200 with the field's message and writes nothing.
 
-    response = seeded_client.post("/tasks", data={**valid_task_form(app), **overrides})
+    The submission the case posts is kept in ``data`` so the description read back out
+    of the textarea is the one this case sent: the fixed description for the cases that
+    leave it alone, and the over-long one for the case about the description bound.
+    """
+    before = task_count(app)
+    data = {**valid_task_form(app), **overrides}
+
+    response = seeded_client.post("/tasks", data=data)
 
     assert response.status_code == 200
     body = response.get_data(as_text=True)
@@ -617,7 +669,7 @@ def test_rejected_create_rerenders_with_its_message(
     assert task_count(app) == before
     # The rest of the form comes back filled in, so the reviewer corrects one field
     # instead of retyping the submission.
-    assert textarea_value(body, "description") == NEW_TASK_DESCRIPTION
+    assert textarea_value(body, "description") == data["description"]
 
 
 def test_create_rejects_a_deadline_before_the_project_start(seeded_client, app) -> None:
@@ -679,7 +731,6 @@ def test_a_task_title_is_escaped_when_rendered(seeded_client, app) -> None:
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
 
 
-
 # --------------------------------------------------------------------------
 # The task detail view and the edit form.
 # --------------------------------------------------------------------------
@@ -705,7 +756,7 @@ def test_task_detail_shows_the_stored_task(seeded_client, app, status: str) -> N
     body = response.get_data(as_text=True)
     assert f"<h1>{task['title']}</h1>" in body
     assert f"badge--{status.replace('_', '-')}" in body
-    assert STATUS_LABELS[status] in body
+    assert STATUS_LABEL_TEXT[status] in body
     assert definition_value(body, "Description") == task["description"].strip()
 
 
@@ -767,18 +818,34 @@ def test_deadline_indicator_states_its_state_in_words(
 
 
 def test_a_completed_task_never_reads_as_overdue(seeded_client, app) -> None:
-    """Finished work is not late, so a completed task shows no overdue state.
+    """A finished task renders its deadline but no overdue state.
 
-    The dataset holds completed tasks whose deadlines have passed, which is the
-    only way this rule is visible at all.
+    The dataset holds completed tasks whose deadlines have passed, which is the only
+    way this rule is visible at all. The page-rendered facts come first -- the response
+    is a 200 carrying the task's own heading, and its deadline block shows the stored
+    date in the interface's format -- so the case proves the deadline was stored and
+    rendered before it proves the overdue wording is withheld; without that, a 404, a
+    500 or a detail view with the deadline block removed would satisfy the absences
+    alone. The same two facts are then checked on the row the task list renders.
     """
     task = seeded_completed_task_with_a_past_deadline()
     task_id = task_id_for(app, task["title"])
+    expected_date = rendered_date(task_row(app, task_id)["deadline"])
 
-    body = seeded_client.get(f"/tasks/{task_id}").get_data(as_text=True)
+    response = seeded_client.get(f"/tasks/{task_id}")
 
-    assert "deadline--overdue" not in body
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert f"<h1>{task['title']}</h1>" in body
+    deadline_markup = definition_value(body, "Deadline")
+    assert expected_date in deadline_markup
+    assert "deadline--overdue" not in deadline_markup
     assert "Overdue" not in body
+
+    row = table_row(seeded_client.get("/tasks").get_data(as_text=True), task_id)
+    assert expected_date in row
+    assert "deadline--overdue" not in row
+    assert "Overdue" not in row
 
 
 # Every way of naming a task that does not exist. The id is decided before the
@@ -959,16 +1026,25 @@ def test_rejected_edit_leaves_the_stored_task_unchanged(seeded_client, app) -> N
     assert after["status"] == before["status"]
 
 
-
 # --------------------------------------------------------------------------
 # Updating a task's status, from the detail view and from the task list.
 # --------------------------------------------------------------------------
 
 
 def test_status_update_from_the_detail_view(seeded_client, app) -> None:
-    """A status change from the detail page is stored and confirmed there."""
+    """A status change from the detail page is stored and confirmed there.
+
+    The detail status select is read back before the action, so a control that never
+    pre-selects the task's stored status fails here rather than passing on the post
+    alone.
+    """
     task = seeded_task_in_status("pending")
     task_id = task_id_for(app, task["title"])
+
+    stored = seeded_client.get(f"/tasks/{task_id}")
+    assert stored.status_code == 200
+    stored_body = stored.get_data(as_text=True)
+    assert selected_option_text(stored_body, "status") == STATUS_LABEL_TEXT["pending"]
 
     response = seeded_client.post(
         f"/tasks/{task_id}/status", data={"status": "completed", "origin": "detail"}
@@ -978,7 +1054,7 @@ def test_status_update_from_the_detail_view(seeded_client, app) -> None:
     assert task_row(app, task_id)["status"] == "completed"
 
     body = seeded_client.get(response.headers["Location"]).get_data(as_text=True)
-    assert f"Status updated to {STATUS_LABELS['completed']}." in body
+    assert "Status updated to Completed." in body
     assert "badge--completed" in body
 
 
@@ -1024,7 +1100,8 @@ def test_status_update_from_a_filtered_list_keeps_the_filters(
     The posted fields are the hidden inputs the rendered row form carries, so this
     exercises the control a reviewer clicks. One of those inputs and the action's
     own value are both called ``status``; posting the harvested mapping plus the
-    new value is what the browser sends.
+    new value is what the browser sends. The row's status select is read back before
+    that post, so a control that never pre-selects the stored status fails here.
     """
     filtered_status = "pending"
     task = seeded_task_in_status(filtered_status)
@@ -1033,7 +1110,10 @@ def test_status_update_from_a_filtered_list_keeps_the_filters(
 
     listing = seeded_client.get("/tasks", query_string={"status": filtered_status})
     assert listing.status_code == 200
-    carried = hidden_inputs(listing.get_data(as_text=True), f"/tasks/{task_id}/status")
+    listing_body = listing.get_data(as_text=True)
+    row_select = selected_option_text(listing_body, f"task-status-{task_id}")
+    assert row_select == STATUS_LABEL_TEXT[filtered_status]
+    carried = hidden_inputs(listing_body, f"/tasks/{task_id}/status")
     assert carried["origin"] == "list"
 
     response = seeded_client.post(

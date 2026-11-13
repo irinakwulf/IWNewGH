@@ -185,7 +185,7 @@ afterwards.
 | `tests/test_dashboard.py` | The four cards report the counts the rows actually hold, the three status buckets are exhaustive and mutually exclusive, a create or a status change moves exactly the cards it should, and the zero state renders its own words. |
 | `tests/test_tasks.py` | The list, the create and edit forms, the detail page and the two quick actions: a write is checked in the page the reviewer lands on and again in the database, a rejection writes nothing, and an unknown id is a 404. |
 | `tests/test_comments.py` | The seeded conversation, adding a comment with its author and timestamp, every rejection (blank body, over-long body, missing author) and the 404 for a comment on a task that does not exist. |
-| `tests/test_filters.py` | Each filter returns exactly its rows, the three combine with `AND`, the Overdue bucket excludes finished work, and a value outside a control's allowed set is a 400 rather than a silently ignored filter. |
+| `tests/test_filters.py` | Each filter returns exactly its rows, the three combine with `AND`, the Overdue bucket excludes finished work, and a value outside a control's allowed set is a 400 rather than a silently ignored filter. It also drives the four Jinja filters of `app/templating.py` directly, including the absent, blank, unparseable and object-valued inputs no page can hand them. |
 | `tests/test_project.py` | The seeded details render, a valid post updates them, an end date before the start date is rejected with nothing written, and the first save creates the single project row. |
 | `tests/test_validation.py` | The parsing layer directly, one case per rule, with no request and no template: typed values and messages asserted as whole mappings and exact strings. |
 | `tests/test_seed.py` | The loader is idempotent and the dataset still covers all three statuses, the unassigned case and the no-deadline case. |
@@ -440,14 +440,16 @@ five minutes and exercises every control the project was asked to make work.
 ├── requirements-dev.txt        # Test pins, including requirements.txt by reference
 ├── pyproject.toml              # Project metadata, pytest options and the 85% coverage gate
 ├── README.md                   # This document
-└── .gitignore                  # Ignores the environment, the database and the test output
+└── .gitignore                  # Ignores the environment, the database, the build and test output
 ```
 
-`instance/` is created at run time by `create_app()` and holds the SQLite file; it is never
-committed. `.gitignore` covers `.venv/`, `instance/`, the bytecode caches (`__pycache__/`
-and `*.py[cod]`), `.coverage` and its siblings, `htmlcov/` and `.pytest_cache/`. The
-`instance/` entry is the one that matters most: the database it holds is disposable and is
-rebuilt by `flask --app app seed-db`.
+`instance/` is created at run time by `create_app()` and holds the SQLite file; it is
+never committed. `.gitignore` covers `.venv/`, `instance/`, the bytecode caches
+(`__pycache__/` and `*.py[cod]`), `.coverage` and its siblings, `htmlcov/`,
+`.pytest_cache/`, and the `build/`, `dist/` and `*.egg-info/` output that building or
+installing this project leaves behind. The `instance/` entry is the one that
+matters most: the database it holds is disposable and is rebuilt by
+`flask --app app seed-db`.
 
 ## Security notes
 

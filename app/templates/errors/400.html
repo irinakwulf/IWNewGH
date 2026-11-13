@@ -1,6 +1,39 @@
+{#
+  The 400 page: what the application shows when a request carries a value that the
+  interface never offers -- a filter, a status or an assignee outside the choices
+  on screen.
+
+  Rendered by the handler create_app registers with @app.errorhandler(400), the
+  `bad_request` function in app/__init__.py, which passes the werkzeug exception it
+  receives as `error` and answers with the 400 status. The page reads that object's
+  `.name`, `.code` and `.description` and nothing else.
+
+  `error.description` is the sentence the failing view supplied to abort(400,
+  description=...). app/blueprints/tasks.py's status and assign actions name the
+  field that carried the rejected value, as `_MSG_INVALID_STATUS` and
+  `_MSG_INVALID_ASSIGNEE`, and the task-list filter path names the offending
+  query parameter, as app/validation.py's MSG_INVALID_FILTER_STATUS,
+  MSG_INVALID_FILTER_ASSIGNEE and MSG_INVALID_FILTER_DEADLINE messages. Werkzeug's
+  own standard sentence stands in when no view supplied one, which is what lets
+  this page read correctly for any 400 the application can raise. The value is
+  autoescaped like every other value in the tree: nothing here is marked safe, and
+  no filter bypasses that escaping.
+
+  The screen's single top-level heading belongs here rather than to
+  app/templates/base.html, which supplies the shell, the navigation and the footer
+  but no heading of its own, so every view and every error page owns one, as the
+  sibling error pages do. A failure page has no primary action, so the link below
+  is secondary.
+
+  Its classes are the ones app/static/css/app.css defines and styles, and no others
+  -- `.empty-state` for the heading-sentence-actions block, `.row` for the action
+  line and `.button` with `.button--secondary` for the link. There is no inline
+  presentation attribute, no script element and no event-handler attribute anywhere
+  in this file, because the application ships no JavaScript at all.
+#}
 {% extends "base.html" %}
 
-{% block title %}{{ error.name }} ({{ error.code }}){% endblock %}
+{% block title %}{{ error.name }} ({{ error.code }}) · Taskboard{% endblock %}
 
 {% block content %}
 <div class="empty-state">

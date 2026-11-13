@@ -4,11 +4,13 @@
 
   Every view template -- dashboard.html, project.html, the three task templates
   and the three error pages -- extends this file and fills exactly two blocks:
-  `title`, the page's own words in the browser tab, which falls back to the
-  product name; and `content`, the screen itself. Neither may be renamed or
-  removed. The page's single top-level heading belongs to the view's content
-  block rather than to this file -- the header's product name is plain text, not
-  a heading -- so no screen ends up with two.
+  `title`, the page's own words in the browser tab, which every view composes
+  as `<page> · Taskboard` -- its own words, a middle dot and the product name
+  appended -- and which falls back to the product name alone when a view sets
+  none; and `content`, the screen itself. Neither may be renamed or removed.
+  The page's single top-level heading belongs to the view's content block
+  rather than to this file -- the header's product name is plain text, not a
+  heading -- so no screen ends up with two.
 
   The navigation's current link is computed here, server-side, from
   `request.endpoint`, because this application ships no JavaScript: nothing in
@@ -35,8 +37,9 @@
   autoescaping Jinja applies to every `.html` template. The classes are the ones
   app/static/css/app.css defines -- `.header`, `.nav`, `.container`, `.footer` and
   the `.row` primitive -- and every style comes from that stylesheet: this file
-  carries no inline style attribute, no second stylesheet, no font, no icon and
-  no image.
+  carries no inline style attribute, no second stylesheet, no font, no image and
+  no icon file. The head does declare an icon, through an empty `data:` URI, so
+  the browser stops requesting a /favicon.ico the application does not ship.
 #}
 {%- set product_name = 'Taskboard' -%}
 {%- set endpoint = request.endpoint or '' -%}
@@ -46,6 +49,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}{{ product_name }}{% endblock %}</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   </head>
   <body>
