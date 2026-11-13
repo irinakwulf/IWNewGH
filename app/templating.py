@@ -11,9 +11,12 @@ The stored shapes are the ones :mod:`app.models` documents: an ISO-8601
 ``datetime('now')`` for a timestamp, and a lowercase member of
 ``app.models.TASK_STATUSES`` for a status.
 
-Every filter returns a string for any input. A malformed value renders as an
-empty string rather than raising, because one bad row must not replace a whole
-page with the error view.
+Every filter returns a string for any input, and a value the filter cannot format
+renders as an empty string rather than raising, because one bad row must not
+replace a whole page with the error view. :func:`format_deadline` is the one
+departure: it states an unreadable deadline's stored text, the way
+:func:`status_label` states an unknown status, so the deadline column never
+renders a blank cell.
 """
 
 from __future__ import annotations
@@ -103,6 +106,13 @@ def _parse_date(value: object) -> datetime.date | None:
         return datetime.date.fromisoformat(date_part)
     except ValueError:
         return None
+
+
+def _stored_text(value: object) -> str:
+    """Return a stored value's own text, or ``""`` when it stores nothing."""
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def _parse_datetime(value: object) -> datetime.datetime | None:
@@ -251,12 +261,17 @@ def format_deadline(deadline: str | None, status: str = "pending") -> str:
         ``"13 Nov 2026 · Due today"``, ``"11 Nov 2026 · Overdue"`` or
         ``"16 Nov 2026 · Due in 3 days"`` for unfinished work inside the window
         :func:`deadline_state` defines; the formatted date alone for a completed task
-        or a deadline further out than :data:`SOON_WINDOW_DAYS`; and ``""`` when the
-        deadline is absent or unparseable, which each caller states in its own words.
+        or a deadline further out than :data:`SOON_WINDOW_DAYS`; the stored value's own
+        text when no date can be read from it, so the column states what the row holds
+        instead of falling blank; and ``""`` only when the deadline is absent or blank,
+        which each caller states in its own words.
     """
     due = _parse_date(deadline)
     if due is None:
-        return ""
+        # A value that holds no date is stated as it is stored, matching
+        # :func:`status_label` on an unknown status: the cell names what the row
+        # carries rather than leaving the reviewer with nothing to read.
+        return _stored_text(deadline)
     date_text = format_date(deadline)
     state = deadline_state(deadline, status)
     if state == "overdue":

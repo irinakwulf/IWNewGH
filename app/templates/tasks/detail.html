@@ -46,10 +46,13 @@
   partials/_field_errors.html, so no sentence the parser owns is repeated here. The
   indicator states no word at all on a completed task -- `format_deadline` leaves it
   out because finished work is not late -- so the deadline block below renders its
-  text without a second status check. Every value rendered here goes through Jinja's
-  autoescaping: the file uses no filter or global that would bypass it, carries no
-  inline style or event-handler attribute, and needs no client-side code -- its
-  controls are plain server-rendered form submissions.
+  text without a second status check. That value never falls blank and states one of
+  three things: the indicator for a stored date, the stored text as it stands for a
+  value no date can be read from -- which only a hand-edited or restored row holds --
+  and "No deadline" for a task whose deadline is absent. Every value rendered here goes
+  through Jinja's autoescaping: the file uses no filter or global that would bypass it,
+  carries no inline style or event-handler attribute, and needs no client-side code --
+  its controls are plain server-rendered form submissions.
 #}
 {% extends "base.html" %}
 {% from "partials/_field_errors.html" import error_summary, field_error %}
@@ -68,12 +71,8 @@
   <dd><span class="badge badge--{{ task.status|replace('_', '-') }}">{{ task.status|status_label }}</span></dd>
   <dt>Deadline</dt>
   <dd>
-    {%- if task.deadline -%}
-      {%- set state = task.deadline|deadline_state(task.status) -%}
-      <span class="deadline{% if state %} deadline--{{ state }}{% endif %}">{{ format_deadline(task.deadline, task.status) }}</span>
-    {%- else -%}
-      <span class="deadline">No deadline</span>
-    {%- endif -%}
+    {%- set state = task.deadline|deadline_state(task.status) -%}
+    <span class="deadline{% if state %} deadline--{{ state }}{% endif %}">{{ format_deadline(task.deadline, task.status) or 'No deadline' }}</span>
   </dd>
   <dt>Created</dt>
   <dd>{{ task.created_at|format_datetime }}</dd>

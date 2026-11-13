@@ -339,7 +339,10 @@ their own, so these conventions hold across every screen:
   word beside a deadline and the filter can therefore never disagree about which work is
   imminent, and the date, the middle dot between them and the word are produced together
   by `app/templating.py`'s `format_deadline`, which both the list and the detail page
-  render, so one deadline reads identically on both screens.
+  render, so one deadline reads identically on both screens. A stored value no date can
+  be read from — reachable only by editing or restoring the database by hand, because
+  the form refuses it — is shown as it is stored, and a task with no deadline reads
+  "No deadline", so the column never renders a blank cell.
 - **Filters** are three, applied together with `AND` in one `WHERE` clause with bound
   parameters and carried in the query string, so a filtered list can be linked and
   survives a row's status change:

@@ -113,6 +113,11 @@ OVER_RANGE_ASSIGNEE_IDS = (
 SQLITE_INTEGER_MAX = 2**63 - 1
 SQLITE_INTEGER_OVERFLOW = 2**63
 
+# A deadline that satisfies the column's digit-shape GLOB check without being a
+# calendar date. The form parser refuses it, so only a hand-edited or restored database
+# holds one; the cases that need it write it through the application's own connection.
+MALFORMED_DEADLINE = "2026-13-45"
+
 # A deadline filter value outside the four the control offers, used to prove a
 # carried value is re-validated rather than ignored.
 UNKNOWN_DEADLINE_FILTER = "yesterday"
@@ -1487,17 +1492,79 @@ def test_one_deadline_reads_the_same_on_the_list_and_the_detail_page(
     assert "\u2014" not in listed
 
 
-@pytest.mark.parametrize("deadline", (None, "", "not-a-date"))
-def test_deadline_indicator_says_nothing_without_a_usable_date(
+@pytest.mark.parametrize("deadline", (None, ""))
+def test_deadline_indicator_says_nothing_when_no_deadline_is_stored(
     deadline: str | None,
 ) -> None:
-    """A missing or unreadable deadline renders no indicator text at all.
+    """A task holding no deadline renders no indicator text at all.
 
-    Both views state that case in their own words ("No deadline") rather than through
-    the indicator, so the formatter returning an empty string is what keeps a blank
-    date from being rendered as if it were a deadline.
+    Both views state that case in their own words ("No deadline"), and the formatter
+    returning an empty string is what tells them there is nothing else to say, so an
+    absent date is never rendered as if it were a deadline.
     """
     assert templating.format_deadline(deadline) == ""
+
+
+@pytest.mark.parametrize("deadline", ("not-a-date", MALFORMED_DEADLINE))
+def test_deadline_indicator_states_an_unreadable_deadline_as_stored(
+    deadline: str,
+) -> None:
+    """A stored value no date can be read from is stated as the row holds it.
+
+    The deadline column always names a state. A value that satisfies the column's
+    digit-shape check without being a calendar date has no date to render and no absent
+    deadline to announce, so the stored text is what the reviewer reads -- exactly as
+    ``status_label`` shows an unknown status as stored rather than blanking it.
+    Rendering nothing would leave a cell that says more than the row does, and silence
+    is the whole of what a screen-reader user hears there.
+    """
+    assert templating.format_deadline(deadline) == deadline
+
+
+def test_an_unreadable_stored_deadline_is_stated_on_both_views(
+    seeded_client, app
+) -> None:
+    """A deadline no date can be read from renders as stored, never as a blank cell.
+
+    The form parser refuses ``2026-13-45`` with "Enter a valid date (YYYY-MM-DD).", so
+    a row holding it can only have been hand-edited or restored -- which is exactly why
+    the column must still say something: a blank deadline cell reads as a rendering
+    fault and leaves a screen-reader user with no deadline at all. The row is written
+    through the application's own connection, then both screens are read the way a
+    reviewer reads them, and the surrounding seeded rows are checked to prove the same
+    page still states "No deadline" where no deadline is stored.
+    """
+    task = seeded_task_with_deadline_state("soon")
+    task_id = task_id_for(app, task["title"])
+    without_deadline_id = task_id_for(app, seeded_task_without_deadline()["title"])
+
+    with app.app_context():
+        db = get_db()
+        db.execute(
+            "UPDATE task SET deadline = ? WHERE id = ?",
+            (MALFORMED_DEADLINE, task_id),
+        )
+        db.commit()
+
+    listing = seeded_client.get("/tasks").get_data(as_text=True)
+    detail = seeded_client.get(f"/tasks/{task_id}").get_data(as_text=True)
+
+    listed = deadline_span_text(
+        table_row(listing, task_id), description=f"the row for /tasks/{task_id}"
+    )
+    shown = deadline_span_text(
+        definition_value(detail, "Deadline"), description="the detail Deadline value"
+    )
+    absent = deadline_span_text(
+        table_row(listing, without_deadline_id),
+        description=f"the row for /tasks/{without_deadline_id}",
+    )
+
+    assert listed == MALFORMED_DEADLINE
+    assert shown == MALFORMED_DEADLINE
+    assert absent == "No deadline"
+    assert '<span class="deadline"></span>' not in listing
+    assert '<span class="deadline"></span>' not in detail
 
 
 def test_the_deadline_reference_day_is_read_once_per_request(app, monkeypatch) -> None:
