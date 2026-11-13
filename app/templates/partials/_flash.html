@@ -1,0 +1,38 @@
+{#
+  Flash region: where the application reports the outcome of a write.
+
+  Included once by app/templates/base.html, directly below the header and with no
+  wrapper of its own, so this file owns the `.container` that lines a message up
+  with the 1080px column every view's content sits in. Nothing else in the template
+  tree includes it, and it renders nothing at all when nothing has been flashed --
+  no container, no empty element and no whitespace that could show as a gap under
+  the header.
+
+  A message's category selects its presentation, and both presentations are the ones
+  app/static/css/app.css defines. `success` renders as `flash flash--success` and is
+  announced politely with role="status"; `error` renders as `flash flash--error` and
+  is announced assertively with role="alert". Any other category -- including the
+  `message` default Flask applies to a flash raised without one -- renders with the
+  success presentation, so a message is never dropped for having a category nothing
+  styles, and no class is ever emitted that the stylesheet does not define. That is
+  why the category is compared here and never interpolated into a class name.
+
+  Each message's text is autoescaped exactly as it was flashed: this file adds no
+  markup around it, no icon, no heading, no dismiss control (a message clears on the
+  next request, which is what the POST-redirect-GET flow already guarantees) and no
+  filter or conversion that would bypass escaping. `get_flashed_messages` pops what
+  it returns, so it is called once per render, here, and nowhere else in the tree.
+#}
+{%- with messages = get_flashed_messages(with_categories=true) -%}
+{%- if messages -%}
+<div class="container">
+{%- for category, message in messages %}
+{%- if category == 'error' %}
+  <p class="flash flash--error" role="alert">{{ message }}</p>
+{%- else %}
+  <p class="flash flash--success" role="status">{{ message }}</p>
+{%- endif %}
+{%- endfor %}
+</div>
+{%- endif -%}
+{%- endwith -%}
