@@ -1,0 +1,65 @@
+{#
+  The task list: the page heading, the toolbar, the result line, and the table.
+
+  Filled by app/blueprints/tasks.py::task_list, which is the only view that
+  renders this template. It reads four context variables and owns none of them:
+
+    tasks        app.services.tasks.list_tasks, already filtered and already in
+                 display order, so nothing here sorts or filters them again
+    members      app.services.members.list_members, read by the filter bar's
+                 Assignee select
+    filters      the app.validation.parse_task_filters values mapping: status,
+                 assignee and deadline, each None when that filter is not
+                 applied. The query string always reaches the parser first, and a
+                 value outside its control's allowed set is answered with the 400
+                 page before this template is rendered, so every filter that
+                 arrives here is valid.
+    total_count  the unfiltered row count, from app.services.metrics -- which is
+                 why the result line can say "2 of 12 tasks" without a second
+                 query, and why the count of matches is tasks|length and never
+                 total_count.
+
+  This file is the screen, not the table. partials/_filter_bar.html owns the GET
+  form and its Apply and Clear controls; partials/_task_table.html owns the rows,
+  the per-row status form, the Edit links and both empty states. Neither markup
+  nor a second form may be restated here, and for the same reason this file
+  includes no flash region and renders no <main>: base.html owns those, along
+  with the header, the navigation and the aria-current mark.
+
+  Two rules that are easy to undo by accident:
+
+  * The toolbar's Create task link renders only while tasks exist. When none do,
+    the table partial's "No tasks yet." state supplies the one create control, so
+    a screen never shows two.
+  * That link is secondary on purpose: the view's primary action is "Apply
+    filters", inside the filter bar.
+
+  No date, status label or deadline word appears in this file. Those come from
+  the four filters in app/templating.py so the badge, the deadline column and the
+  deadline filter cannot disagree. There is no script and no auto-submitting
+  select anywhere, so nothing on this screen moves until a button is pressed.
+#}
+{% extends "base.html" %}
+
+{% block title %}Tasks{% endblock %}
+
+{% block content %}
+  <h1>Tasks</h1>
+
+  {% set filters_applied = filters.status or filters.assignee or filters.deadline %}
+  {% set total = total_count|default(tasks|length) %}
+
+  <div class="row">
+    {% include "partials/_filter_bar.html" %}
+    {% if total > 0 %}
+      <a class="button button--secondary" href="{{ url_for('tasks.create') }}">Create task</a>
+    {% endif %}
+  </div>
+
+  {# One line, with no whitespace between the tags and the words: a reviewer
+     compares this sentence against the rows below it, and the seeded list has to
+     read exactly "12 tasks", "2 of 12 tasks match these filters" and "1 task". #}
+  <p>{% if filters_applied %}{{ tasks|length }} of {{ total }} tasks match these filters{% elif total == 1 %}1 task{% else %}{{ total }} tasks{% endif %}</p>
+
+  {% include "partials/_task_table.html" %}
+{% endblock %}
