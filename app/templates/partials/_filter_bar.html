@@ -25,7 +25,11 @@
   Every option value below is one app.validation.parse_task_filters accepts, and
   the empty value is the "All" option it reads as "not applied". A non-empty
   value outside those sets is answered with HTTP 400, so this form must never be
-  able to produce one.
+  able to produce one. No set is restated here: the Status options iterate
+  TASK_STATUSES, the Deadline options iterate DEADLINE_FILTER_LABELS and the
+  Assignee control's "Unassigned" option reads ASSIGNEE_UNASSIGNED, all globals
+  app/__init__.py publishes, so a bucket or status added to a vocabulary becomes
+  selectable here and one removed stops being offered.
 #}
 <form class="filters" method="get" action="{{ url_for('tasks.list') }}">
   <div>
@@ -46,7 +50,9 @@
     <label for="filter-assignee">Assignee</label>
     <select class="select" id="filter-assignee" name="assignee">
       <option value=""{% if not filters or filters.assignee is none or filters.assignee is not defined %} selected{% endif %}>All</option>
-      <option value="unassigned"{% if filters and filters.assignee is not none and filters.assignee|string == "unassigned" %} selected{% endif %}>Unassigned</option>
+      {# ASSIGNEE_UNASSIGNED is the word the filter parser reads as "nobody", so the
+         option submits the global rather than spelling it again here. #}
+      <option value="{{ ASSIGNEE_UNASSIGNED }}"{% if filters and filters.assignee is not none and filters.assignee|string == ASSIGNEE_UNASSIGNED %} selected{% endif %}>Unassigned</option>
       {% for member in members %}
       <option value="{{ member.id }}"{% if filters and filters.assignee is not none and filters.assignee|string == member.id|string %} selected{% endif %}>{{ member.name }}</option>
       {% endfor %}
@@ -56,10 +62,12 @@
     <label for="filter-deadline">Deadline</label>
     <select class="select" id="filter-deadline" name="deadline">
       <option value=""{% if not filters or filters.deadline is none or filters.deadline is not defined %} selected{% endif %}>All</option>
-      <option value="overdue"{% if filters and filters.deadline == "overdue" %} selected{% endif %}>Overdue</option>
-      <option value="today"{% if filters and filters.deadline == "today" %} selected{% endif %}>Due today</option>
-      <option value="week"{% if filters and filters.deadline == "week" %} selected{% endif %}>Due this week</option>
-      <option value="none"{% if filters and filters.deadline == "none" %} selected{% endif %}>No deadline</option>
+      {# DEADLINE_FILTER_LABELS pairs each bucket the parser accepts with the wording
+         the bar shows for it, in the order app/models.py lists them, so this form
+         offers exactly the buckets that parser answers. #}
+      {% for value, label in DEADLINE_FILTER_LABELS.items() %}
+      <option value="{{ value }}"{% if filters and filters.deadline == value %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
     </select>
   </div>
   <div>

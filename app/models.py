@@ -6,9 +6,10 @@ Python types the application passes around: ``deadline`` is an ISO-8601
 ``YYYY-MM-DD`` string or ``None``, timestamps are the UTC text SQLite writes with
 ``datetime('now')``, and ``status`` is one of ``TASK_STATUSES``.
 
-Label and deadline wording deliberately live in :mod:`app.templating`, not here:
-presentation has one home, which keeps the status badge, the deadline indicator
-and the deadline filter from disagreeing with each other.
+How these labels and deadline states are rendered deliberately lives in
+:mod:`app.templating`, not here: presentation has one home, which keeps the
+status badge, the deadline indicator and the deadline filter reading the
+vocabularies this module defines, so none of them can disagree with another.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from typing import Any
 
 __all__ = [
     "Comment",
+    "DEADLINE_FILTER_LABELS",
     "Member",
     "Project",
     "STATUS_LABELS",
@@ -34,6 +36,21 @@ STATUS_LABELS: dict[str, str] = {
     "pending": "Pending",
     "in_progress": "In progress",
     "completed": "Completed",
+}
+
+# The deadline buckets the deadline filter offers, in the order the filter bar lists
+# them, each with the wording the bar shows for it. The keys are the filter's
+# vocabulary: app/validation.py derives :data:`app.validation.DEADLINE_FILTERS` from
+# them, and app/services/tasks.py interprets each one as a predicate over the
+# ``deadline`` and ``status`` columns -- "week" covering today through today + 6, the
+# same seven-day window :func:`app.templating.deadline_state` calls "soon" -- so the
+# control, the parser and the deadline indicator cannot disagree about which work is
+# late or imminent.
+DEADLINE_FILTER_LABELS: dict[str, str] = {
+    "overdue": "Overdue",
+    "today": "Due today",
+    "week": "Due this week",
+    "none": "No deadline",
 }
 
 

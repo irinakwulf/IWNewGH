@@ -33,8 +33,8 @@ from werkzeug.exceptions import HTTPException
 
 from app import config, db, templating
 from app.blueprints import dashboard, project, tasks
-from app.models import TASK_STATUSES
-from app.validation import FIELD_LIMITS
+from app.models import DEADLINE_FILTER_LABELS, TASK_STATUSES
+from app.validation import ASSIGNEE_UNASSIGNED, DEADLINE_FILTERS, FIELD_LIMITS
 
 __all__ = ["create_app"]
 
@@ -90,9 +90,10 @@ def create_app(test_config: dict[str, object] | None = None) -> Flask:
     Returns:
         A ready :class:`flask.Flask` application: configured, with its database
         folder present and its schema applied, the four template filters
-        registered, the two template globals published -- ``TASK_STATUSES`` from
-        :mod:`app.models` and ``FIELD_LIMITS`` from :mod:`app.validation`, so a
-        template reads the shared vocabulary rather than restating it -- the three
+        registered, the five template globals published -- ``TASK_STATUSES`` and
+        ``DEADLINE_FILTER_LABELS`` from :mod:`app.models`, and ``DEADLINE_FILTERS``,
+        ``ASSIGNEE_UNASSIGNED`` and ``FIELD_LIMITS`` from :mod:`app.validation`, so
+        a template reads the shared vocabulary rather than restating it -- the three
         blueprints mounted at the paths their routes declare, the two database
         commands available to the CLI, the 400, 404 and 500 handlers rendering the
         application's own error pages, and the handler that keeps a read of a
@@ -134,11 +135,18 @@ def create_app(test_config: dict[str, object] | None = None) -> Flask:
     db.init_app(app)
     templating.init_app(app)
 
-    # Template vocabulary no view may restate: the closed status set that app/models.py
-    # owns and the bounds app/validation.py enforces. A template iterating
-    # TASK_STATUSES, or reading a maxlength from FIELD_LIMITS, cannot drift from the
-    # rules behind them.
-    app.jinja_env.globals.update(TASK_STATUSES=TASK_STATUSES, FIELD_LIMITS=FIELD_LIMITS)
+    # Template vocabulary no view may restate: the closed status set and the deadline
+    # buckets with the wording each shows, all owned by app/models.py, the sentinel
+    # and the bounds app/validation.py enforces, and the buckets that module accepts.
+    # A template iterating one of those sets, or reading a maxlength from
+    # FIELD_LIMITS, cannot drift from the rule behind it.
+    app.jinja_env.globals.update(
+        ASSIGNEE_UNASSIGNED=ASSIGNEE_UNASSIGNED,
+        DEADLINE_FILTERS=DEADLINE_FILTERS,
+        DEADLINE_FILTER_LABELS=DEADLINE_FILTER_LABELS,
+        FIELD_LIMITS=FIELD_LIMITS,
+        TASK_STATUSES=TASK_STATUSES,
+    )
 
     # A fresh checkout must serve the dashboard, the task list and the project
     # screen -- empty states, zero counts -- without anyone running init-db first.

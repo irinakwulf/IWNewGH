@@ -28,7 +28,15 @@
   required, maxlength and rows attributes below are convenience only, and `novalidate`
   on the form makes sure the parser's own messages are what a reviewer sees: an empty
   name or an unparseable date must reach the parser and come back beside its field,
-  with the summary above the form, rather than being stopped by a browser bubble.
+  with the summary above the form, rather than being stopped by a browser bubble. The
+  two maxlength attributes restate no number of their own: each reads FIELD_LIMITS, the
+  vocabulary app/__init__.py publishes to every template, so the hint the browser
+  applies and the bound the parser enforces move together.
+
+  The Name field declares autocomplete="off" for the same kind of reason. Its id,
+  `name`, is a spelling the browser's autofill heuristics recognise, so a field that
+  leaves the attribute out is reported as an unresolved autofill target on every
+  render and may be offered a person's name where a project's name belongs.
 
   The form posts to a URL built by url_for, so no target arrives from the request, and
   it carries no anti-forgery token: the application holds no credential to forge and is
@@ -73,12 +81,12 @@
     <div class="stack">
       <div>
         <label for="name">Name</label>
-        <input class="input" type="text" id="name" name="name" value="{{ values.name }}" maxlength="120" required{% if errors and errors.name %} aria-invalid="true" aria-describedby="name-error"{% endif %}>
+        <input class="input" type="text" id="name" name="name" value="{{ values.name }}" autocomplete="off" maxlength="{{ FIELD_LIMITS.project_name }}" required{% if errors and errors.name %} aria-invalid="true" aria-describedby="name-error"{% endif %}>
         {{ field_error(errors, 'name') }}
       </div>
       <div>
         <label for="description">Description</label>
-        <textarea class="textarea" id="description" name="description" rows="4" maxlength="2000"{% if errors and errors.description %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description }}</textarea>
+        <textarea class="textarea" id="description" name="description" rows="4" maxlength="{{ FIELD_LIMITS.description }}"{% if errors and errors.description %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description }}</textarea>
         {{ field_error(errors, 'description') }}
       </div>
       <div class="stack">

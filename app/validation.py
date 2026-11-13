@@ -137,8 +137,10 @@ _COMMENT_BODY_LIMIT = 1000
 # The same bounds, named for the templates: a control's maxlength is a hint the
 # browser applies, and it must not be able to disagree with the sentence the parser
 # returns. app/__init__.py exposes this mapping to Jinja, so a form reads the bound
-# instead of restating the number.
+# instead of restating the number. `project_name` is the project form's Name field,
+# bounded separately from a task's title.
 FIELD_LIMITS: dict[str, int] = {
+    "project_name": _PROJECT_NAME_LIMIT,
     "title": _TITLE_LIMIT,
     "description": _DESCRIPTION_LIMIT,
     "comment_body": _COMMENT_BODY_LIMIT,
@@ -152,10 +154,13 @@ DEFAULT_STATUS: str = "pending"
 # and the dashboard counts cannot recognise different statuses.
 STATUS_FILTERS: tuple[str, ...] = models.TASK_STATUSES
 
-# The deadline buckets the deadline filter offers. Each is a predicate over
-# ``deadline`` and ``status`` rather than a value to compare, so they are named
-# here and interpreted in app/services/tasks.py.
-DEADLINE_FILTERS: tuple[str, ...] = ("overdue", "today", "week", "none")
+# The deadline buckets the deadline filter offers: the keys of the mapping
+# app/models.py holds, which pairs each bucket with the wording the filter bar shows
+# for it. Declaring the set there is what keeps the options this module accepts the
+# options the bar renders. Each bucket is a predicate over ``deadline`` and
+# ``status`` rather than a value to compare, so it is interpreted in
+# app/services/tasks.py.
+DEADLINE_FILTERS: tuple[str, ...] = tuple(models.DEADLINE_FILTER_LABELS)
 
 # What the assignee filter submits to select tasks nobody is assigned to. A word
 # rather than an id, so it can never be confused with one.
