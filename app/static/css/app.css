@@ -543,10 +543,10 @@ textarea:focus-visible {
   min-block-size: calc(var(--space-7) * 2);
 }
 
-/* The one hint sentence under a field -- the deadline rule on the task form -- is a
-   plain paragraph, while every error message beside a field carries the .field-error
-   class; matching only a paragraph with no class keeps the hint muted without
-   touching an error's colour. */
+/* A hint sentence under a field -- the deadline's entry format on the task form, the
+   start and end dates' on the project screen -- is a plain paragraph, while every
+   error message beside a field carries the .field-error class; matching only a
+   paragraph with no class keeps the hint muted without touching an error's colour. */
 .stack > p:not([class]) {
   color: var(--color-text-muted);
   font-size: var(--text-sm);

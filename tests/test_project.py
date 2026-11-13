@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, timedelta
+from html import unescape
 from typing import Any
 
 import pytest
@@ -245,6 +246,87 @@ def assert_empty_project_form(html: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reading the rendered page. Attribute order is never assumed: a control's
+# attributes are parsed into a mapping before any one of them is read.
+# ---------------------------------------------------------------------------
+
+_ATTRIBUTE = re.compile(r'([\w-]+)="([^"]*)"')
+_CONTROL_TAGS = ("input", "select", "textarea")
+_LABEL = re.compile(r"<label\b([^>]*)>(.*?)</label>", re.DOTALL | re.IGNORECASE)
+_ANCHOR = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.DOTALL | re.IGNORECASE)
+
+
+def control_attributes(html: str, control_id: str) -> dict[str, str]:
+    """Return the attributes of the form control carrying ``control_id``.
+
+    Args:
+        html: The rendered page.
+        control_id: The value of the control's ``id`` attribute.
+
+    Returns:
+        The control's attributes as a mapping, so a case reads ``name``,
+        ``aria-invalid`` or ``aria-describedby`` by name instead of matching markup
+        in a fixed order.
+
+    Raises:
+        AssertionError: If the page renders no input, select or textarea with that
+            id, which would mean the control the label names does not exist.
+    """
+    for tag in _CONTROL_TAGS:
+        pattern = re.compile(
+            rf'<{tag}\b[^>]*\bid="{re.escape(control_id)}"[^>]*>', re.IGNORECASE
+        )
+        match = pattern.search(html)
+        if match is not None:
+            return dict(_ATTRIBUTE.findall(match.group(0)))
+    raise AssertionError(f"no form control with id={control_id!r} in the page")
+
+
+def label_text(html: str, control_id: str) -> str:
+    """Return the text of the ``<label>`` that points at one control.
+
+    A label is tied to its control by the ``for`` attribute and by nothing else, so
+    this reads the label whose ``for`` names ``control_id`` rather than the first
+    label the page happens to render.
+
+    Args:
+        html: The rendered page.
+        control_id: The value of the labelled control's ``id`` attribute.
+
+    Returns:
+        The label's text, unescaped and stripped of surrounding whitespace, so an
+        empty return is a label that names the control but says nothing.
+
+    Raises:
+        AssertionError: If no label names that control, which leaves the control
+            with no accessible name at all.
+    """
+    for attributes, text in _LABEL.findall(html):
+        if dict(_ATTRIBUTE.findall(attributes)).get("for") == control_id:
+            return unescape(text).strip()
+    raise AssertionError(f"no <label for={control_id!r}> in the page")
+
+
+def current_links(html: str) -> list[str]:
+    """Return the text of every anchor the page marks ``aria-current="page"``.
+
+    The navigation states which of its three sections the visitor is in, so the
+    caller asserts both the mark's presence and that exactly one anchor carries it.
+
+    Args:
+        html: The rendered page.
+
+    Returns:
+        The marked anchors' text, unescaped and stripped, in document order.
+    """
+    return [
+        unescape(text).strip()
+        for attributes, text in _ANCHOR.findall(html)
+        if dict(_ATTRIBUTE.findall(attributes)).get("aria-current") == "page"
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Phase A -- the seeded view.
 # ---------------------------------------------------------------------------
 
@@ -287,6 +369,43 @@ def test_project_form_is_prefilled_with_the_stored_values(
     assert f'value="{offset_iso(project["start_offset"])}"' in html
     assert f'value="{offset_iso(project["end_offset"])}"' in html
     assert SUBMIT_LABEL in html
+
+
+# The four controls the project form declares, in the order the screen lists them. Each
+# id is the field name app.validation.parse_project_form reads, and it is also what the
+# label's ``for`` and every ``<field>-error`` id are built from.
+PROJECT_CONTROLS = ("name", "description", "start_date", "end_date")
+
+
+@pytest.mark.parametrize("control_id", PROJECT_CONTROLS)
+def test_project_form_labels_every_control(
+    seeded_client: FlaskClient, control_id: str
+) -> None:
+    """Every control on the project form carries a visible, non-empty label.
+
+    The label's ``for`` is the only thing that gives the control its accessible name,
+    so a label that names no control, or a control that no label names, fails here.
+    The control must also post under the field name the parser reads, which is what
+    keeps the label's target and the field it fills the same thing.
+    """
+    html = seeded_client.get(PROJECT_PATH).get_data(as_text=True)
+
+    assert label_text(html, control_id), f"{control_id} has an empty label"
+    assert control_attributes(html, control_id).get("name") == control_id
+
+
+def test_the_project_screen_marks_the_project_nav_link_current(
+    seeded_client: FlaskClient,
+) -> None:
+    """The project screen marks the Project link in the navigation, and only that link.
+
+    The mark is how the shell says which of its three sections the visitor is in, so a
+    page carrying none leaves the navigation without a position and a page carrying two
+    answers the question with a contradiction.
+    """
+    html = seeded_client.get(PROJECT_PATH).get_data(as_text=True)
+
+    assert current_links(html) == ["Project"]
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +513,37 @@ def test_rejected_project_post_changes_nothing(
     for submitted in form.values():
         if submitted.strip():
             assert submitted.strip() in html, "a submitted value should survive"
+
+
+def test_a_rejected_project_field_is_flagged_for_assistive_technology(
+    seeded_client: FlaskClient, rows: Rows
+) -> None:
+    """The name field's message is tied to the control that caused it.
+
+    The paragraph carrying the ``name-error`` id is the one the control points at, and
+    ``aria-invalid="true"`` is what tells assistive technology the value was refused, so
+    the whole association is asserted rather than the sentence alone. The two date hints
+    are read on a clean render beside it, because a hint describes its control before
+    anything is wrong -- that is when the format it states is needed.
+    """
+    clean = seeded_client.get(PROJECT_PATH).get_data(as_text=True)
+    for control_id in ("start_date", "end_date"):
+        described_by = control_attributes(clean, control_id).get("aria-describedby")
+        assert described_by == f"{control_id}-hint"
+        assert f'id="{control_id}-hint"' in clean
+
+    before = stored_project(rows)
+
+    response = seeded_client.post(PROJECT_PATH, data=valid_form(name=""))
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    error = f'<p class="field-error" id="name-error">{MSG_ENTER_PROJECT_NAME}</p>'
+    assert error in html
+    name = control_attributes(html, "name")
+    assert name.get("aria-invalid") == "true"
+    assert name.get("aria-describedby") == "name-error"
+    assert stored_project(rows) == before
 
 
 def test_end_date_before_start_date_is_rejected(

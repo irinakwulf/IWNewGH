@@ -20,9 +20,11 @@
   comment form's -- so both quick actions are secondary, the same weight the task
   list gives the same status change. Because those two forms render no box, their
   selects and buttons stand beside them and name them with `form="..."`, which
-  leaves the document order as the reading and tab order. Both quick actions carry
-  a hidden `origin` of `detail`, which is a navigation hint only: the view uses it
-  to choose between two redirect targets it names itself, and no field ever carries
+  leaves the document order as the reading and tab order. Each form is also named
+  for its action with an `aria-label`, so the three action groups are
+  distinguishable when navigating by form. Both quick actions carry a hidden
+  `origin` of `detail`, which is a navigation hint only: the view uses it to
+  choose between two redirect targets it names itself, and no field ever carries
   a URL. Neither form offers a `next`/`redirect` input, so no redirect target is
   request-supplied.
 
@@ -70,10 +72,10 @@
 </dl>
 
 <div class="quick-actions">
-  <form id="task-status-form" method="post" action="{{ url_for('tasks.set_status', task_id=task.id) }}">
+  <form id="task-status-form" method="post" action="{{ url_for('tasks.set_status', task_id=task.id) }}" aria-label="Update status">
     <input type="hidden" name="origin" value="detail">
   </form>
-  <form id="task-assign-form" method="post" action="{{ url_for('tasks.set_assignee', task_id=task.id) }}">
+  <form id="task-assign-form" method="post" action="{{ url_for('tasks.set_assignee', task_id=task.id) }}" aria-label="Assign task">
     <input type="hidden" name="origin" value="detail">
   </form>
 
@@ -123,7 +125,7 @@
 
 <h2>Add a comment</h2>
 {{ error_summary(errors) }}
-<form class="stack" method="post" action="{{ url_for('tasks.add_comment', task_id=task.id) }}">
+<form class="stack" method="post" action="{{ url_for('tasks.add_comment', task_id=task.id) }}" aria-label="Add comment">
   <div class="stack">
     <label for="author_id">Author</label>
     <select class="select" id="author_id" name="author_id"{% if errors.author_id %} aria-invalid="true" aria-describedby="author_id-error"{% endif %}>

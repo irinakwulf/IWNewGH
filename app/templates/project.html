@@ -69,7 +69,7 @@
   </div>
   {% endif %}
   {{ error_summary(errors) }}
-  <form method="post" action="{{ url_for('project.view') }}" novalidate>
+  <form method="post" action="{{ url_for('project.view') }}" novalidate aria-label="Project details">
     <div class="stack">
       <div>
         <label for="name">Name</label>
@@ -81,15 +81,21 @@
         <textarea class="textarea" id="description" name="description" rows="4" maxlength="2000"{% if errors and errors.description %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description }}</textarea>
         {{ field_error(errors, 'description') }}
       </div>
-      <div>
-        <label for="start_date">Start date</label>
-        <input class="input" type="date" id="start_date" name="start_date" value="{{ values.start_date }}" required{% if errors and errors.start_date %} aria-invalid="true" aria-describedby="start_date-error"{% endif %}>
-        {{ field_error(errors, 'start_date') }}
+      <div class="stack">
+        <div>
+          <label for="start_date">Start date</label>
+          <input class="input" type="date" id="start_date" name="start_date" value="{{ values.start_date }}" required aria-describedby="{% if errors and errors.start_date %}start_date-error {% endif %}start_date-hint"{% if errors and errors.start_date %} aria-invalid="true"{% endif %}>
+          {{ field_error(errors, 'start_date') }}
+        </div>
+        <p id="start_date-hint">Pick a date with the calendar button, or type it in the order the field's segments show.</p>
       </div>
-      <div>
-        <label for="end_date">End date</label>
-        <input class="input" type="date" id="end_date" name="end_date" value="{{ values.end_date }}" required{% if errors and errors.end_date %} aria-invalid="true" aria-describedby="end_date-error"{% endif %}>
-        {{ field_error(errors, 'end_date') }}
+      <div class="stack">
+        <div>
+          <label for="end_date">End date</label>
+          <input class="input" type="date" id="end_date" name="end_date" value="{{ values.end_date }}" required aria-describedby="{% if errors and errors.end_date %}end_date-error {% endif %}end_date-hint"{% if errors and errors.end_date %} aria-invalid="true"{% endif %}>
+          {{ field_error(errors, 'end_date') }}
+        </div>
+        <p id="end_date-hint">Pick a date with the calendar button, or type it in the order the field's segments show.</p>
       </div>
       <div>
         <button type="submit" class="button button--primary">Save project details</button>

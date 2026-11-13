@@ -127,6 +127,8 @@ _FORM = re.compile(r"<form\b[^>]*>.*?</form>", re.DOTALL | re.IGNORECASE)
 _INPUT = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
 _OPTION = re.compile(r"<option\b([^>]*)>(.*?)</option>", re.DOTALL | re.IGNORECASE)
 _SELECTED = re.compile(r"(?:^|\s)selected(?:\s|$)")
+_LABEL = re.compile(r"<label\b([^>]*)>(.*?)</label>", re.DOTALL | re.IGNORECASE)
+_ANCHOR = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.DOTALL | re.IGNORECASE)
 
 # The deadline indicator's span, with whatever state class modifiers it carries. One
 # pattern serves both the row helper and the detail page, so neither reads its text by
@@ -382,6 +384,50 @@ def valid_task_form(app: Flask) -> dict[str, str]:
     }
 
 
+def task_screen_path(app, screen: str) -> str:
+    """Return the path of one of the four task screens.
+
+    Args:
+        app: The application whose database holds the task the two id-bearing
+            screens open on.
+        screen: ``"list"``, ``"create"``, ``"detail"`` or ``"edit"``.
+
+    Returns:
+        The path of that screen. The id ``detail`` and ``edit`` need is looked up
+        through :func:`task_id_for`, so no task id is written down here.
+
+    Raises:
+        ValueError: If ``screen`` is not one of the four.
+    """
+    if screen == "list":
+        return "/tasks"
+    if screen == "create":
+        return "/tasks/new"
+    task_id = task_id_for(app, seeded_task_in_status("pending")["title"])
+    if screen == "detail":
+        return f"/tasks/{task_id}"
+    if screen == "edit":
+        return f"/tasks/{task_id}/edit"
+    raise ValueError(f"Unknown task screen: {screen!r}")
+
+
+def task_form_url(app, screen: str) -> str:
+    """Return the read path of one of the two task-form screens.
+
+    The edit form needs a stored task, so the path is built from a seeded row's own
+    id rather than written down, and both screens are reached through the path the
+    contract gives them.
+
+    Args:
+        app: The application whose database is read.
+        screen: ``"create"`` for the empty form, ``"edit"`` for a stored task's.
+    """
+    if screen == "create":
+        return "/tasks/new"
+    task = seeded_task_in_status("pending")
+    return f"/tasks/{task_id_for(app, task['title'])}/edit"
+
+
 # --------------------------------------------------------------------------
 # Reading the rendered page. These helpers exist so no case has to guess a field
 # name, assume an attribute order or compare a whole HTML block.
@@ -409,6 +455,50 @@ def tag_attributes(body: str, tag: str, element_id: str) -> dict:
     match = pattern.search(body)
     assert match is not None, f"no <{tag} id={element_id!r}> in the page"
     return dict(_ATTRIBUTE.findall(match.group(0)))
+
+
+def label_text(body: str, control_id: str) -> str:
+    """Return the text of the ``<label>`` that points at one control.
+
+    A label is tied to its control by the ``for`` attribute and by nothing else, so
+    this reads the label whose ``for`` names ``control_id`` rather than the first
+    label the page happens to render.
+
+    Args:
+        body: The rendered page.
+        control_id: The value of the labelled control's ``id`` attribute.
+
+    Returns:
+        The label's text, unescaped and stripped of surrounding whitespace, so an
+        empty return is a label that names the control but says nothing.
+
+    Raises:
+        AssertionError: If no label names that control, which leaves the control
+            with no accessible name at all.
+    """
+    for attributes, text in _LABEL.findall(body):
+        if dict(_ATTRIBUTE.findall(attributes)).get("for") == control_id:
+            return unescape(text).strip()
+    raise AssertionError(f"no <label for={control_id!r}> in the page")
+
+
+def current_links(body: str) -> list[str]:
+    """Return the text of every anchor the page marks ``aria-current="page"``.
+
+    The navigation states which of its three sections the visitor is in, so the
+    caller asserts both the mark's presence and that exactly one anchor carries it.
+
+    Args:
+        body: The rendered page.
+
+    Returns:
+        The marked anchors' text, unescaped and stripped, in document order.
+    """
+    return [
+        unescape(text).strip()
+        for attributes, text in _ANCHOR.findall(body)
+        if dict(_ATTRIBUTE.findall(attributes)).get("aria-current") == "page"
+    ]
 
 
 def input_value(body: str, element_id: str) -> str:
@@ -664,6 +754,28 @@ def test_unseeded_task_list_offers_to_create_the_first_task(client) -> None:
     assert "<table" not in body
 
 
+# The three task screens the navigation covers: the list, the create form and one
+# task's detail view. Every one of them is a ``tasks.*`` endpoint, which is what the
+# shell reads to decide which link it marks.
+TASK_SCREENS = ("list", "create", "detail")
+
+
+@pytest.mark.parametrize("screen", TASK_SCREENS)
+def test_the_task_screens_mark_the_tasks_nav_link_current(
+    seeded_client, app, screen: str
+) -> None:
+    """Every task screen marks the Tasks link in the navigation, and only that link.
+
+    The mark is how the shell says which of its three sections the visitor is in, so
+    a page carrying none leaves the navigation without a position and a page carrying
+    two answers the question with a contradiction. The detail screen's id is looked up
+    rather than written down, so all three screens are read on the seeded dataset.
+    """
+    body = seeded_client.get(task_screen_path(app, screen)).get_data(as_text=True)
+
+    assert current_links(body) == ["Tasks"]
+
+
 # --------------------------------------------------------------------------
 # Creating a task.
 # --------------------------------------------------------------------------
@@ -678,6 +790,136 @@ def test_create_form_defaults_the_status_to_pending(seeded_client) -> None:
     assert "New task" in body
     assert selected_option_text(body, "status") == STATUS_LABELS["pending"]
     assert selected_option_text(body, "assignee_id") == "Unassigned"
+
+
+# The five controls the task form declares, each paired with the element that renders
+# it. The id is the field name app.validation.parse_task_form reads, and it is also
+# what the label's ``for`` and every ``<field>-error`` id are built from.
+TASK_FORM_CONTROLS = (
+    ("title", "input"),
+    ("description", "textarea"),
+    ("assignee_id", "select"),
+    ("status", "select"),
+    ("deadline", "input"),
+)
+
+# The element each field name is rendered by, for the assertion that flags a control.
+TASK_FORM_CONTROL_TAGS = dict(TASK_FORM_CONTROLS)
+
+# The two screens one template serves, so a label that renders on the create form but
+# not on the edit form cannot pass.
+TASK_FORM_SCREENS = ("create", "edit")
+
+
+@pytest.mark.parametrize("screen", TASK_FORM_SCREENS)
+@pytest.mark.parametrize(("control_id", "tag"), TASK_FORM_CONTROLS)
+def test_task_form_labels_every_control(
+    seeded_client, app, screen: str, control_id: str, tag: str
+) -> None:
+    """Every control on the task form carries a visible, non-empty label.
+
+    ``GET /tasks/new`` and ``GET /tasks/<id>/edit`` render the same template, so both
+    are read, with the edit screen's id looked up rather than written down. The label
+    is tied to its control by ``for`` alone, and the control posts under the field name
+    the parser reads, so a label pointing at a wrong id, or at nothing, fails here.
+    """
+    response = seeded_client.get(task_screen_path(app, screen))
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    assert label_text(body, control_id), f"{control_id} has an empty label"
+    assert tag_attributes(body, tag, control_id).get("name") == control_id
+
+
+# The two screens that render the task form, by the read path each is served on.
+FORM_SCREENS = ("create", "edit")
+
+
+@pytest.mark.parametrize("screen", FORM_SCREENS)
+def test_a_head_request_answers_the_form_a_get_renders(
+    seeded_client, app, screen: str
+) -> None:
+    """A HEAD probe takes the read branch and carries the GET's own headers.
+
+    Flask adds HEAD to every GET rule, which is why the two form views branch on the
+    write method rather than on GET: an equal Content-Length is what proves the
+    probe did not fall through to the write branch, whose re-render of the form is a
+    different and longer page.
+    """
+    url = task_form_url(app, screen)
+
+    get = seeded_client.get(url)
+    head = seeded_client.head(url)
+
+    assert get.status_code == 200
+    assert head.status_code == 200
+    assert head.headers["Content-Length"] == get.headers["Content-Length"]
+    assert head.get_data() == b""
+
+
+@pytest.mark.parametrize("screen", FORM_SCREENS)
+def test_a_form_path_accepts_no_write(seeded_client, app, screen: str) -> None:
+    """Each endpoint has one write rule, and it is not the form's own path.
+
+    The create form posts to ``POST /tasks`` and the edit form to
+    ``POST /tasks/<id>``, so a post to either read path is a method that rule does
+    not offer -- the same read path is not a second write door -- and no row is
+    written.
+    """
+    before = task_count(app)
+
+    response = seeded_client.post(
+        task_form_url(app, screen), data=valid_task_form(app)
+    )
+
+    assert response.status_code == 405
+    assert task_count(app) == before
+
+
+# The three task actions that answer a form post and no read request, by the path
+# segment each is served on.
+WRITE_ONLY_ACTION_PATHS = ("status", "assign", "comments")
+
+
+@pytest.mark.parametrize("action", WRITE_ONLY_ACTION_PATHS)
+def test_a_read_of_a_write_only_action_lands_on_its_task(
+    seeded_client, app, action: str
+) -> None:
+    """A GET of a write-only action answers with the task page, not a bare 405.
+
+    A rejected data-entry post re-renders its own form at 200, so the address bar
+    keeps the path it posted to. A read of that path -- a bookmark, a hand-typed URL,
+    a reload whose resubmission was cancelled -- is sent to the task the action
+    belongs to, inside the application's shell, rather than to Werkzeug's own 405
+    page, which names neither the task nor a way back.
+    """
+    task = seeded_task_in_status("pending")
+    task_id = task_id_for(app, task["title"])
+
+    response = seeded_client.get(f"/tasks/{task_id}/{action}")
+
+    assert_redirects_to(response, f"/tasks/{task_id}")
+
+
+def test_a_method_mismatch_outside_the_task_actions_keeps_the_405(app, client) -> None:
+    """Only the three write-only task actions are redirected; anything else is 405.
+
+    The redirect exists because those paths are what a rejected post leaves in the
+    address bar. Answering every method mismatch with a redirect would promise a
+    route the contract does not serve, so a post-only path elsewhere keeps the
+    default response, and so does a path that offers neither method at all.
+    """
+
+    @app.route("/probe/<int:task_id>/post-only", methods=["POST"])
+    def probe_post_only(task_id):
+        return "written"
+
+    @app.route("/probe/put-only", methods=["PUT"])
+    def probe_put_only():
+        return "written"
+
+    assert client.get("/probe/1/post-only").status_code == 405
+    assert client.get("/probe/put-only").status_code == 405
 
 
 def test_create_task_writes_the_row_and_confirms_it(seeded_client, app) -> None:
@@ -740,11 +982,18 @@ def test_rejected_create_rerenders_with_its_message(
 ) -> None:
     """A rejected create answers 200 with the field's message and writes nothing.
 
+    The message is asserted as the whole paragraph a screen reader reaches, not as a
+    bare sentence: partials/_field_errors.html gives it the ``<field>-error`` id, the
+    flagged control points at that id with ``aria-describedby`` and states
+    ``aria-invalid="true"``, and the control the submission left alone keeps neither
+    attribute. The flag therefore cannot drift from the message it describes.
+
     The submission the case posts is kept in ``data`` so the description read back out
     of the textarea is the one this case sent: the fixed description for the cases that
     leave it alone, and the over-long one for the case about the description bound.
     """
     before = task_count(app)
+    flagged = next(iter(overrides))
     data = {**valid_task_form(app), **overrides}
 
     response = seeded_client.post("/tasks", data=data)
@@ -752,10 +1001,19 @@ def test_rejected_create_rerenders_with_its_message(
     assert response.status_code == 200
     body = response.get_data(as_text=True)
     assert message in body
+    assert f'<p class="field-error" id="{flagged}-error">{message}</p>' in body
     assert task_count(app) == before
     # The rest of the form comes back filled in, so the reviewer corrects one field
     # instead of retyping the submission.
     assert textarea_value(body, "description") == data["description"]
+
+    described = tag_attributes(body, TASK_FORM_CONTROL_TAGS[flagged], flagged)
+    assert described.get("aria-invalid") == "true"
+    assert f"{flagged}-error" in described.get("aria-describedby", "").split()
+    if flagged != "description":
+        untouched = tag_attributes(body, "textarea", "description")
+        assert "aria-invalid" not in untouched
+        assert "aria-describedby" not in untouched
 
 
 @pytest.mark.parametrize("assignee_id", OVER_RANGE_ASSIGNEE_IDS)
@@ -795,6 +1053,36 @@ def test_create_rejects_a_deadline_before_the_project_start(seeded_client, app) 
     body = response.get_data(as_text=True)
     assert "Deadline cannot be earlier than the project start date." in body
     assert task_count(app) == before
+
+
+def test_the_deadline_field_is_described_by_its_hint(seeded_client, app) -> None:
+    """The deadline's hint is part of the control's description on every render.
+
+    The hint is the only place the field's format is stated, so it is wired with
+    ``aria-describedby`` even when nothing is wrong -- the state a screen-reader user
+    needs before typing rather than after being refused. A rejection prepends the
+    error's id and flags the control, and both ids it then names resolve on the page,
+    so the message and the hint are each announced with the field they belong to.
+    """
+    clean = seeded_client.get("/tasks/new").get_data(as_text=True)
+    clean_deadline = tag_attributes(clean, "input", "deadline")
+    assert clean_deadline.get("aria-describedby") == "deadline-hint"
+    assert 'id="deadline-hint"' in clean
+
+    start = date.fromisoformat(project_start_iso())
+    deadline = (start - timedelta(days=1)).isoformat()
+
+    response = seeded_client.post(
+        "/tasks", data={**valid_task_form(app), "deadline": deadline}
+    )
+
+    assert response.status_code == 200
+    rejected = response.get_data(as_text=True)
+    rejected_deadline = tag_attributes(rejected, "input", "deadline")
+    assert rejected_deadline.get("aria-describedby") == "deadline-error deadline-hint"
+    assert rejected_deadline.get("aria-invalid") == "true"
+    assert 'id="deadline-error"' in rejected
+    assert 'id="deadline-hint"' in rejected
 
 
 def test_create_accepts_a_deadline_after_the_project_end(seeded_client, app) -> None:
@@ -897,6 +1185,37 @@ def test_task_detail_shows_the_stored_task(seeded_client, app, status: str) -> N
     assert f"badge--{status.replace('_', '-')}" in body
     assert STATUS_LABEL_TEXT[status] in body
     assert definition_value(body, "Description") == task["description"].strip()
+
+
+# The four controls the task detail page renders, each paired with the element that
+# renders it: the update-status select, the assign select, the comment author select
+# and the comment body.
+DETAIL_CONTROLS = (
+    ("status", "select"),
+    ("assignee_id", "select"),
+    ("author_id", "select"),
+    ("body", "textarea"),
+)
+
+
+@pytest.mark.parametrize(("control_id", "tag"), DETAIL_CONTROLS)
+def test_task_detail_labels_every_control(
+    seeded_client, app, control_id: str, tag: str
+) -> None:
+    """Every control on the task detail page carries a visible, non-empty label.
+
+    The label's ``for`` is the only thing giving these controls their accessible name,
+    because the three action forms on this page are told apart by their own names
+    rather than by anything the controls inside them say. The task's id is looked up
+    rather than written down, and each control posts under the field name the parser
+    reads, so a label pointing at a wrong id, or at nothing, fails here.
+    """
+    response = seeded_client.get(task_screen_path(app, "detail"))
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    assert label_text(body, control_id), f"{control_id} has an empty label"
+    assert tag_attributes(body, tag, control_id).get("name") == control_id
 
 
 @pytest.mark.parametrize("status", TASK_STATUSES)
@@ -1506,6 +1825,25 @@ def test_assigning_an_unknown_member_is_a_400(seeded_client, app) -> None:
     assert task_row(app, task_id)["assignee_id"] == before
 
 
+# The spellings of a member id that ``int()`` would have coerced. The assignee
+# field, the assignee filter and the comment author all refuse each one, so the
+# assign quick action must refuse it too instead of resolving it to a real member.
+# ``{id}`` stands for a stored member's id, which the case fills in.
+REJECTED_ASSIGNEE_SPELLINGS = (
+    pytest.param("+{id}", id="leading-plus"),
+    pytest.param("\u0663", id="arabic-indic-digit"),
+    pytest.param("\uff15", id="fullwidth-digit"),
+    pytest.param("{id}_0", id="pep-515-underscore"),
+)
+
+# The ASCII digit runs every member control accepts: a member's own id, and the same
+# id zero-padded.
+ACCEPTED_ASSIGNEE_SPELLINGS = (
+    pytest.param("{id}", id="plain"),
+    pytest.param("0{id}", id="zero-padded"),
+)
+
+
 @pytest.mark.parametrize("assignee_id", OVER_RANGE_ASSIGNEE_IDS)
 def test_assigning_an_out_of_range_member_is_a_400(
     seeded_client, app, assignee_id: str
@@ -1530,6 +1868,51 @@ def test_assigning_an_out_of_range_member_is_a_400(
     assert "assignee_id" in body
     assert "Select a team member from the list." in body
     assert task_row(app, task_id)["assignee_id"] == before
+
+
+@pytest.mark.parametrize("spelling", REJECTED_ASSIGNEE_SPELLINGS)
+def test_assign_rejects_a_member_id_spelling_the_field_rejects(
+    seeded_client, app, spelling: str
+) -> None:
+    """A spelling the shared member rule refuses is a 400, not an assignment.
+
+    The four member controls accept exactly the same spellings, so a signed or
+    non-ASCII digit run that the task form answers with a field message is a
+    malformed request here, and the stored assignee is left alone.
+    """
+    task = seeded_assigned_task()
+    task_id = task_id_for(app, task["title"])
+    before = task_row(app, task_id)["assignee_id"]
+    member = member_for_email(app, seed.SAMPLE_DATA["members"][0]["email"])
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/assign",
+        data={"assignee_id": spelling.format(id=member.id), "origin": "detail"},
+    )
+
+    assert response.status_code == 400
+    body = response.get_data(as_text=True)
+    assert "assignee_id" in body
+    assert "Select a team member from the list." in body
+    assert task_row(app, task_id)["assignee_id"] == before
+
+
+@pytest.mark.parametrize("spelling", ACCEPTED_ASSIGNEE_SPELLINGS)
+def test_assign_resolves_an_ascii_digit_run_to_its_member(
+    seeded_client, app, spelling: str
+) -> None:
+    """A run of ASCII digits still assigns the member it names."""
+    task = seeded_unassigned_task()
+    task_id = task_id_for(app, task["title"])
+    member = member_for_email(app, seed.SAMPLE_DATA["members"][0]["email"])
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/assign",
+        data={"assignee_id": spelling.format(id=member.id), "origin": "detail"},
+    )
+
+    assert_redirects_to(response, f"/tasks/{task_id}")
+    assert int(task_row(app, task_id)["assignee_id"]) == member.id
 
 
 @pytest.mark.parametrize("carried", OVER_RANGE_ASSIGNEE_IDS)
@@ -1558,6 +1941,68 @@ def test_list_origin_assign_rejects_a_carried_assignee_out_of_range(
     body = unescape(response.get_data(as_text=True))
     assert "assignee: Invalid value for filter 'assignee'." in body
     assert task_row(app, task_id)["assignee_id"] is None
+
+
+# Digit runs no stored member can have, so that every member control refuses them
+# instead of raising: a twenty-digit run past SQLite's signed 64-bit INTEGER, the
+# nineteen-digit value just past it, where binding the value would raise
+# OverflowError, and a run longer than the 4300 digits CPython's int() converts at
+# all, where the conversion itself raises.
+OVERLARGE_ASSIGNEE_IDS = (
+    pytest.param(str(2**63), id="past-the-64-bit-bound"),
+    pytest.param("1" + "0" * 19, id="twenty-digits"),
+    pytest.param("9" * 4301, id="past-the-conversion-limit"),
+)
+
+
+@pytest.mark.parametrize("submitted", OVERLARGE_ASSIGNEE_IDS)
+def test_assign_refuses_an_assignee_id_no_row_could_hold(
+    seeded_client, app, submitted: str
+) -> None:
+    """An id past the stored range is the quick action's 400, and nothing is written.
+
+    The assign control answers a value that cannot name a member the way it answers
+    one that names no member: the 400 page naming ``assignee_id``. The stored
+    assignee is left as it was, so neither the length of the run nor its magnitude
+    can reach the database bind.
+    """
+    task = seeded_assigned_task()
+    task_id = task_id_for(app, task["title"])
+    before = task_row(app, task_id)["assignee_id"]
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/assign",
+        data={"assignee_id": submitted, "origin": "detail"},
+    )
+
+    assert response.status_code == 400
+    body = response.get_data(as_text=True)
+    assert "assignee_id" in body
+    assert "Select a team member from the list." in body
+    assert task_row(app, task_id)["assignee_id"] == before
+
+
+@pytest.mark.parametrize("submitted", OVERLARGE_ASSIGNEE_IDS)
+def test_create_form_refuses_an_assignee_id_no_row_could_hold(
+    seeded_client, app, submitted: str
+) -> None:
+    """The same value is a field message on the form, and no row is written.
+
+    The task form is a data-entry control, so the value the quick action rejects
+    with a 400 comes back as the Assignee field's own message at 200, with the
+    submission still in the other fields and nothing stored.
+    """
+    before = task_count(app)
+
+    response = seeded_client.post(
+        "/tasks", data={**valid_task_form(app), "assignee_id": submitted}
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Select a team member from the list." in body
+    assert task_count(app) == before
+    assert textarea_value(body, "description") == NEW_TASK_DESCRIPTION
 
 
 def test_assigning_from_a_filtered_list_keeps_the_filters(seeded_client, app) -> None:

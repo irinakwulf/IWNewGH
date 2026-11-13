@@ -4,19 +4,20 @@
   app/blueprints/tasks.py renders this file from three places and two screens --
   `GET /tasks/new` with `task` None, `GET /tasks/<id>/edit` with the stored task,
   and the re-render both of those views perform when a submission is rejected.
-  `task` decides only which of the two screens is being shown: the heading, the
+  `task` decides only which of the two screens is being shown: the heading -- the
+  one string the tab title, the h1 and the form's accessible name all read -- the
   form's action and nothing else. Every control takes its content from `values`,
   because `values` already carries the stored task on a first render and the
   reviewer's submitted text after a rejection -- which is what brings the form
   back filled in, with only the offending field flagged.
 
-  The action is always a POST rule of the endpoint this screen belongs to, built
-  with `url_for(..., _method='POST')` rather than written as a path: the create
-  endpoint serves both `POST /tasks` and the `GET|POST` path this form was
-  rendered from, and the edit endpoint likewise pairs `POST /tasks/<id>` with
-  `GET|POST /tasks/<id>/edit`. Naming the endpoint and the method keeps the two
-  paths in app/blueprints/tasks.py the single source of both URLs, so a route
-  change cannot leave a dead `action` attribute here.
+  The action is always the endpoint's write rule, built with
+  `url_for(..., _method='POST')` rather than written as a path: this form posts to
+  `POST /tasks` when it creates and to `POST /tasks/<id>` when it edits, while
+  `/tasks/new` and `/tasks/<id>/edit` are the reads it was rendered from. Naming the
+  endpoint and the method keeps those paths in app/blueprints/tasks.py the single
+  source of both URLs, so a route change cannot leave a dead `action` attribute
+  here.
 
   Nothing in this file decides a rule. The five control names are exactly the keys
   app.validation.parse_task_form reads -- title, description, assignee_id, status
@@ -24,8 +25,10 @@
   in partials/_field_errors.html: `error_summary` above the form lists every
   problem at once, and `field_error(errors, 'title')` renders the one sentence
   beside that field, owning the `<field>-error` id a control points at with
-  `aria-describedby`. No message string is written here, and `errors` being empty
-  is the only thing that keeps the aria wiring off a control.
+  `aria-describedby`. The one sentence this file writes itself is the deadline's
+  hint, which states how to enter a date rather than what the parser will accept;
+  the hint's id is in that control's `aria-describedby` on every render, and only
+  the error id joins it when the field is flagged.
 
   The three status options are the closed set of app/models.py in the schema's
   order, their text coming from the `status_label` filter so STATUS_LABELS stays
@@ -52,14 +55,18 @@
 {% extends "base.html" %}
 {% from "partials/_field_errors.html" import error_summary, field_error %}
 
-{% block title %}{% if task %}Edit task · Taskboard{% else %}New task · Taskboard{% endif %}{% endblock %}
+{# One expression for the screen's name. The tab title, the page heading and the
+   form's accessible name all read it, so a wording change lands in all three. #}
+{% set heading = 'Edit task' if task else 'New task' %}
+
+{% block title %}{{ heading }} · Taskboard{% endblock %}
 
 {% block content %}
-  <h1>{% if task %}Edit task{% else %}New task{% endif %}</h1>
+  <h1>{{ heading }}</h1>
 
   {{ error_summary(errors) }}
 
-  <form class="stack" method="post" action="{% if task %}{{ url_for('tasks.edit', task_id=task.id, _method='POST') }}{% else %}{{ url_for('tasks.create', _method='POST') }}{% endif %}" novalidate>
+  <form class="stack" method="post" action="{% if task %}{{ url_for('tasks.edit', task_id=task.id, _method='POST') }}{% else %}{{ url_for('tasks.create', _method='POST') }}{% endif %}" novalidate aria-label="{{ heading }}">
     <div class="stack">
       <label for="title">Title</label>
       <input class="input" type="text" id="title" name="title" value="{{ values.title|default('', true) }}" maxlength="{{ FIELD_LIMITS.title }}" required{% if errors and errors.get('title') %} aria-invalid="true" aria-describedby="title-error"{% endif %}>
@@ -95,9 +102,9 @@
 
     <div class="stack">
       <label for="deadline">Deadline</label>
-      <input class="input" type="date" id="deadline" name="deadline" value="{{ values.deadline|default('', true) }}"{% if errors and errors.get('deadline') %} aria-invalid="true" aria-describedby="deadline-error"{% endif %}>
-      <p>Optional; a deadline may not be earlier than the project start date.</p>
+      <input class="input" type="date" id="deadline" name="deadline" value="{{ values.deadline|default('', true) }}" aria-describedby="{% if errors and errors.get('deadline') %}deadline-error {% endif %}deadline-hint"{% if errors and errors.get('deadline') %} aria-invalid="true"{% endif %}>
       {{ field_error(errors, 'deadline') }}
+      <p id="deadline-hint">Optional. Pick a date with the calendar button, or type it in the order the field's segments show.</p>
     </div>
 
     <div class="row">

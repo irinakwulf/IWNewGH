@@ -98,6 +98,38 @@ UNKNOWN_MEMBER_IDS = (
     pytest.param("abc", id="not-a-number"),
 )
 
+# The spellings a submitted member id arrives in, and whether the shared rule
+# resolves each one. The accepted forms are the decimal shapes every member control
+# must agree on; the rejected ones are what ``int()`` would have coerced -- a sign,
+# a PEP 515 underscore, a non-ASCII digit -- plus the two that name no member at
+# all. ``{id}`` stands for a stored member's id, which the case fills in so no id is
+# written down here.
+MEMBER_ID_SPELLINGS = (
+    pytest.param("{id}", True, id="plain"),
+    pytest.param(" {id} ", True, id="surrounding-whitespace"),
+    pytest.param("0{id}", True, id="zero-padded"),
+    pytest.param("+{id}", False, id="leading-plus"),
+    pytest.param("\u0663", False, id="arabic-indic-digit"),
+    pytest.param("\uff15", False, id="fullwidth-digit"),
+    pytest.param("{id}_0", False, id="pep-515-underscore"),
+    pytest.param("", False, id="empty"),
+    pytest.param("abc", False, id="not-a-number"),
+    pytest.param(UNKNOWN_MEMBER_ID, False, id="no-such-row"),
+)
+
+# Digit runs no stored id could be, and what the shared rule answers for each: a
+# twenty-digit run past SQLite's signed 64-bit INTEGER, the nineteen-digit value just
+# past it, a run longer than the 4300 digits CPython converts at all, and a run that
+# is only that long because of the leading zeros the zero-padded form allows -- which
+# names the member its trailing digits name. ``{id}`` stands for a stored member's
+# id, as above.
+OVERLARGE_MEMBER_ID_SPELLINGS = (
+    pytest.param(str(2**63), False, id="past-the-64-bit-bound"),
+    pytest.param("1" + "0" * 19, False, id="twenty-digits"),
+    pytest.param("9" * 4301, False, id="past-the-conversion-limit"),
+    pytest.param("0" * 4301 + "{id}", True, id="zero-padded-past-the-limit"),
+)
+
 # Values naming no member because no key could hold them. SQLite's signed 64-bit
 # column stores at most 19 digits, so the first case is already larger than any row
 # could be while staying short enough to convert; the others run past the limit the
@@ -1021,7 +1053,7 @@ def test_filters_apply_together(app_context: None, sample_member_id: int) -> Non
 
 
 # ---------------------------------------------------------------------------
-# The two exported helpers the parsers and the quick actions share.
+# The three exported helpers the parsers and the quick actions share.
 # ---------------------------------------------------------------------------
 
 
@@ -1055,3 +1087,37 @@ def test_is_valid_status_accepts_the_closed_set(status: str) -> None:
 def test_is_valid_status_rejects_anything_else(status: str) -> None:
     """A label, a padded value or any other word is not a status."""
     assert validation.is_valid_status(status) is False
+
+
+@pytest.mark.parametrize(("submitted", "resolves"), MEMBER_ID_SPELLINGS)
+def test_resolve_member_id_is_the_rule_every_member_control_shares(
+    app_context: None, sample_member_id: int, submitted: str, resolves: bool
+) -> None:
+    """Only a trimmed ASCII digit run naming a stored member resolves to an id.
+
+    This is the rule the assignee field, the assignee filter and the comment author
+    reach through the parsers, exported for the assign quick action, so a spelling
+    that one of the four controls rejects is rejected by all four.
+    """
+    resolved = validation.resolve_member_id(submitted.format(id=sample_member_id))
+
+    assert resolved == (sample_member_id if resolves else None)
+
+
+@pytest.mark.parametrize(("submitted", "resolves"), OVERLARGE_MEMBER_ID_SPELLINGS)
+def test_resolve_member_id_bounds_the_run_before_converting_it(
+    app_context: None, sample_member_id: int, submitted: str, resolves: bool
+) -> None:
+    """A digit run too large to be an id names no member, and never raises.
+
+    The bound is the schema's own: an id is a SQLite INTEGER, so a value past the
+    signed 64-bit range cannot name a row and would raise ``OverflowError`` at the
+    bind. A run longer than CPython's 4300-digit conversion limit would raise in
+    ``int()`` before the lookup even happens, and a submission is not allowed to
+    reach either: both answer ``None``, which is the answer an unknown id gives. The
+    padding the zero-padded form allows is what the run is measured after, so it
+    does not turn an accepted spelling into a rejected one.
+    """
+    resolved = validation.resolve_member_id(submitted.format(id=sample_member_id))
+
+    assert resolved == (sample_member_id if resolves else None)

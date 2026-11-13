@@ -30,7 +30,10 @@ never a request, because the existence check reads the member table through
 member id is checked through that same function, so those three controls cannot
 disagree about who exists. That lookup is the module's only service call, and it
 only reads: this module decides what a value is, never what to do with it, so
-nothing here can change stored data.
+nothing here can change stored data. The same resolution is exported as
+:func:`resolve_member_id`, which is what the assign quick action resolves its
+posted id with, so the fourth control accepts exactly the spellings those three
+do.
 
 The task-list parser is the only one whose errors a view answers differently: a
 write re-renders its own form, whereas a filter value outside its allowed set is a
@@ -77,6 +80,7 @@ __all__ = [
     "parse_project_form",
     "parse_task_filters",
     "parse_task_form",
+    "resolve_member_id",
 ]
 
 # The shape a parser receives. Naming the request globals by their content rather
@@ -342,6 +346,29 @@ def _resolve_member(text: str) -> models.Member | None:
     if len(significant) > _MEMBER_ID_MAX_DIGITS:
         return None
     return members.get_member(int(significant or "0"))
+
+
+def resolve_member_id(raw: str | None) -> int | None:
+    """Return the id of the member a submitted value names, or None if it names none.
+
+    The one rule every member control shares, made public for the assign quick
+    action: the text is trimmed, and only a run of ASCII digits naming a stored
+    member resolves. The three controls the parsers own reach it through
+    :func:`_resolve_member`, so the quick action accepts exactly the spellings the
+    assignee field, the assignee filter and the comment author accept.
+
+    Args:
+        raw: The submitted text, or ``None`` when the control was not submitted.
+
+    Returns:
+        The stored member's id, or ``None`` for a value that is not an ASCII digit
+        run, for a run too large to be an id, or that names no member. The empty
+        string resolves to ``None`` as well, which is how an assignment is cleared.
+    """
+    member = _resolve_member(_trim(raw))
+    if member is None:
+        return None
+    return member.id
 
 
 def _assignee_value(raw: str | None) -> tuple[int | None, str | None]:

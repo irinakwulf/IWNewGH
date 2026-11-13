@@ -27,11 +27,14 @@ The dashboard's failure path is asserted here too: a raise from the service the
 view calls answers with the 500 page, so the delivery of "the error pages" is a
 check rather than a reading of the template.
 
-The module talks only to Flask's test client, through the ``seeded_client``,
-``client`` and ``app`` fixtures of ``tests/conftest.py``. It imports no Flask module
-and opens no application context; the reads of the database it needs -- the id of a
-seeded task and the project row's two stored dates -- are queries over the
-``db_path`` fixture.
+The module talks to Flask's test client, through the ``seeded_client``, ``client``
+and ``app`` fixtures of ``tests/conftest.py``, and the reads of the database it
+needs -- the id of a seeded task and the project row's two stored dates -- are
+queries over the ``db_path`` fixture. It imports no Flask module. Two of its tests
+read the metric service itself rather than the page, inside an application context
+the ``app`` fixture supplies, because the list's single ``COUNT(*)`` and the
+transaction that holds a render's two statements on one snapshot have no rendering
+of their own to observe.
 """
 
 from __future__ import annotations
@@ -47,6 +50,8 @@ from typing import Any
 import pytest
 
 import seed
+from app.db import get_db
+from app.services import metrics
 
 # --------------------------------------------------------------------------
 # The interface the dashboard is contracted to render.
@@ -624,6 +629,58 @@ def test_unassigned_and_undated_tasks_are_counted_like_any_other(
     post_new_task(seeded_client)
     _, grown = read_dashboard(seeded_client)
     assert counts_from(grown)["total"] == counts["total"] + 1
+
+
+# --------------------------------------------------------------------------
+# The metric service itself: the total is its own count, and the two statements
+# of a render observe one snapshot of the table.
+# --------------------------------------------------------------------------
+
+
+def test_total_task_count_is_the_seeded_row_count_and_the_dashboard_total(app, db_path):
+    """The list's single count counts every row and agrees with the dashboard.
+
+    The task list's "2 of 12 tasks match these filters" line comes from this one
+    count and the four cards come from the mapping, so the two are asserted to be
+    the same number: a list whose total disagreed with the dashboard would be
+    counting different rows. The value is also read back out of the table itself, so
+    neither the page nor the service can agree with the other on a wrong number.
+    """
+    seed.seed_database(db_path)
+
+    with app.app_context():
+        count = metrics.total_task_count()
+        assert count == len(sample_tasks())
+        assert count == count_task_rows(db_path)
+        assert count == metrics.dashboard_metrics()["total"]
+
+
+def test_dashboard_metrics_joins_a_transaction_that_is_already_open(app, db_path):
+    """A render joins a transaction the caller already opened instead of a second.
+
+    The deferred read transaction is what keeps a render's two statements on one
+    snapshot of the table, and a caller may already hold one. Starting a second is
+    what SQLite rejects ("cannot start a transaction within a transaction") and
+    ending the caller's would be just as wrong, so the four counts are read inside
+    the open transaction and it is still open when the call returns. The counts
+    themselves are the seeded ones, so joining the transaction reads the real table.
+    """
+    seed.seed_database(db_path)
+    expected = expected_counts()
+
+    with app.app_context():
+        connection = get_db()
+        assert not connection.in_transaction
+        connection.execute("BEGIN DEFERRED")
+        try:
+            counts = metrics.dashboard_metrics()
+            # The service found a transaction and left it alone: only the caller
+            # ends the one it started.
+            assert connection.in_transaction
+        finally:
+            connection.rollback()
+
+    assert counts == expected
 
 
 # --------------------------------------------------------------------------

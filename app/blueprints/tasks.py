@@ -1,23 +1,28 @@
 """The task routes: the list, the create and edit forms, the detail view, and the
 two quick actions and the comment post that hang off it.
 
-Nine URL rules carry the eleven request shapes the interface uses, and between them
-they cover every task capability the product has: creating a task, assigning it to a
-team member, moving it through the three closed statuses, giving it a deadline,
-discussing it in comments, and filtering the list by status, assignee and deadline.
-Each capability is one route and one service call, so a reviewer reading this module
-sees the whole HTTP surface of a task in one place.
+Nine URL rules carry the nine task endpoints the interface uses -- one rule, and one
+method, per endpoint -- and between them they cover every task capability the
+product has: creating a task, assigning it to a team member, moving it through the
+three closed statuses, giving it a deadline, discussing it in comments, and
+filtering the list by status, assignee and deadline. Each capability is one
+endpoint, and the two saves among them pair the read rule that renders the form with
+the write rule beside it -- creating a task is ``GET /tasks/new`` for the fields and
+``POST /tasks`` to store them -- so a reviewer reading this module sees the whole
+HTTP surface of a task in one place.
 
 Every view does the same small thing in the same order, which is what keeps the
 layer boundary visible: it reads ``request.args`` on a read path or ``request.form``
-on a write path, hands the raw strings to :mod:`app.validation`, calls one function
-in :mod:`app.services`, and then either flashes a confirmation and redirects or
-re-renders its own template with the errors. Nothing here writes SQL, opens a
-connection, formats a date or decides a business rule -- the services and the parser
-own all of that -- and no statement or redirect target is ever assembled from a
-submitted string. The one consequence worth naming: the wording of every rule lives
-in :mod:`app.validation`, so a rejection here is answered entirely from that
-module's message map.
+on a write path, parses the submitted strings in :mod:`app.validation`, calls one
+function in :mod:`app.services`, and then either flashes a confirmation and
+redirects or re-renders its own template with the errors. No view types a submitted
+value itself, the assign quick action's member id included, because that value is
+resolved by the same rule the three member controls the parsers own go through.
+Nothing here writes SQL, opens a connection, formats a date or decides a business
+rule -- the services and the parser own all of that -- and no statement or redirect
+target is ever assembled from a submitted string. The wording of every rule lives in
+:mod:`app.validation` too, with the one exception named below: the two quick
+actions' 400 descriptions.
 
 **Two rejection paths, chosen by where the offending value came from.** The
 data-entry posts -- create, edit, comment -- collect the parser's ``{field:
@@ -27,17 +32,22 @@ form. The quick actions -- a status change and an assignment from a list row or 
 the detail view -- and the task list's query string carry a single value that the
 interface only ever offers from a closed set, so a value outside that set means the
 request itself is malformed: those answer with the 400 page, naming the parameter.
-An unknown task id is a 404, and it is decided before the posted value is looked at,
-so an id that does not exist is a 404 whatever the payload.
+Their descriptions are the exception to the wording rule above: each is the
+malformed-request form of the equivalent field message -- the parameter name, then
+the sentence the parser uses for the same mistake -- which is why the two sit beside
+their explanation at ``_MSG_INVALID_STATUS`` and ``_MSG_INVALID_ASSIGNEE``. An
+unknown task id is a 404, and it is decided before the posted value is looked at, so
+an id that does not exist is a 404 whatever the payload.
 
 **Returning a quick action to a filtered list.** A row's status or assign action is
 posted from the task list and returns the reviewer to that same filtered list, so
-the three filter values travel with the request in the form action's query string.
-One of those filters is itself named ``status``, which the status action also uses
-for its own new value, so the two are kept in separate mappings rather than renamed:
-the action's value is read from the body and the filters from the query string, and
-``filter_status``, ``filter_assignee`` and ``filter_deadline`` are accepted from the
-body for a form that renders them as hidden inputs instead. The carried filters are
+the three filter values travel with the request as the hidden ``filter_status``,
+``filter_assignee`` and ``filter_deadline`` inputs the row template renders -- that
+is the shape the interface actually posts. One of those filters is itself named
+``status``, which the status action also uses for its own new value, so the two are
+kept in separate mappings rather than renamed: the action's value is read from the
+body and the filters from the ``filter_*`` names, and a form action carrying them in
+its query string instead is the accepted alternative. The carried filters are
 re-validated with the same parser the list itself uses, before the write, so a
 malformed request cannot change a row; the redirect is then rebuilt with ``url_for``
 from those validated values. No target is taken from the request, which is why the
@@ -69,6 +79,7 @@ from app.validation import (
     parse_comment_form,
     parse_task_filters,
     parse_task_form,
+    resolve_member_id,
 )
 
 __all__ = ["bp"]
@@ -137,12 +148,13 @@ def _origin() -> str:
 def _carried_filters(*, exclude: tuple[str, ...] = ()) -> dict[str, object]:
     """Re-validate the task-list filters a list-origin quick action carried.
 
-    The filters arrive in the form action's query string, which is why the query
-    string wins when it holds any of them: on the status action one filter and the
-    action's own value are both called ``status``, and only the body belongs to the
-    action. A form that renders the filters as hidden inputs instead is served by
-    the form fallback, which reads ``filter_*`` names first and the plain name
-    second, skipping whatever ``exclude`` names.
+    The filters arrive as the row template's hidden ``filter_*`` inputs, and the
+    query string wins when it holds any of them: on the status action one filter
+    and the action's own value are both called ``status``, and only the body
+    belongs to the action. A form that carries the filters in its action's query
+    string instead is served by that first branch, and the body fallback reads the
+    ``filter_*`` names first and the plain name second, skipping whatever
+    ``exclude`` names.
 
     Args:
         exclude: Filter names not to read from the form body. The status action
@@ -297,9 +309,9 @@ def _render_task_detail(
 
 
 # --------------------------------------------------------------------------
-# The routes. Seven views serve the nine rules: the create form and the edit form
-# each own two rules, because a form may post to the path it was rendered from or
-# to the collection path the contract names, and both are accepted.
+# The routes. Seven views serve the nine endpoints: each one has exactly one rule
+# and one method, a read rule for the list, the two forms and the detail page and a
+# write rule for the two saves and the three actions that hang off the detail page.
 # --------------------------------------------------------------------------
 
 
@@ -310,8 +322,10 @@ def task_list():
     ``app.validation.parse_task_filters`` reads ``status``, ``assignee`` and
     ``deadline`` and ``app.services.tasks.list_tasks`` applies them; the members are
     read for the filter bar's Assignee select, and ``total_count`` comes from
-    ``app.services.metrics.dashboard_metrics`` so the "2 of 12 tasks match these
-    filters" line counts the whole table without a second task query.
+    ``app.services.metrics.total_task_count`` so the "2 of 12 tasks match these
+    filters" line counts the whole table with one ``COUNT(*)``: the result line needs
+    the unfiltered total and none of the status buckets a dashboard render computes,
+    so none of them is computed here.
 
     A filter value outside its control's allowed set is a malformed request rather
     than a field to correct, so it is answered with the 400 page naming the
@@ -326,19 +340,16 @@ def task_list():
         tasks=task_service.list_tasks(filters),
         members=members.list_members(),
         filters=filters,
-        total_count=metrics.dashboard_metrics()["total"],
+        total_count=metrics.total_task_count(),
     )
 
 
-# The pair's rules are registered bottom-up, so the contract's collection path is
-# declared last and registers first. That order decides what a method-aware
-# `url_for` builds: both rules of this endpoint accept POST, and werkzeug returns
-# the first rule whose methods accept the requested one, so declaring
-# `POST /tasks` first is what makes `url_for("tasks.create", _method="POST")` -- the
-# action the task form submits to -- build `/tasks` instead of `/tasks/new`. A plain
-# `url_for` is unaffected: with no method it looks for a GET rule first, and only
-# the form path accepts GET.
-@bp.route("/tasks/new", methods=["GET", "POST"], endpoint="create")
+# One read rule and one write rule for this endpoint: `/tasks/new` renders the form
+# and `POST /tasks` is the only path that creates a task. `url_for("tasks.create",
+# _method="POST")` asks for the write method, which only one rule accepts, so the
+# task form's action is the contract's collection path while a plain `url_for` --
+# the "Create task" link -- builds the form's own read path.
+@bp.route("/tasks/new", methods=["GET"], endpoint="create")
 @bp.route("/tasks", methods=["POST"], endpoint="create")
 def task_create():
     """Render the empty create form, or create a task from a submitted one.
@@ -352,7 +363,10 @@ def task_create():
     The GET render defaults the Status select to Pending, which is the same status
     the parser and the schema apply when a submission names none.
     """
-    if request.method == "GET":
+    # Tested for the write method rather than for GET, because Flask adds HEAD to
+    # every GET rule: a HEAD probe must take this branch and receive the form's
+    # response without its body, not the write branch's re-render.
+    if request.method != "POST":
         return _render_task_form(task=None, values=_empty_task_values())
 
     values, errors = parse_task_form(request.form, projects.get_project())
@@ -379,11 +393,11 @@ def task_detail(task_id):
     return _render_task_detail(task)
 
 
-# Registered in the same order as the create pair above, and for the same reason:
-# `url_for("tasks.edit", task_id=..., _method="POST")` -- the edit form's action --
-# builds `/tasks/<id>`, while the plain build keeps selecting the GET rule and
-# `/tasks/<id>/edit`.
-@bp.route("/tasks/<int:task_id>/edit", methods=["GET", "POST"], endpoint="edit")
+# The edit endpoint follows the same shape: `/tasks/<id>/edit` renders the form and
+# `POST /tasks/<id>` is the only path that saves it, so the form's action built with
+# `url_for("tasks.edit", task_id=..., _method="POST")` lands on the item path while
+# the "Edit task" link builds the read path.
+@bp.route("/tasks/<int:task_id>/edit", methods=["GET"], endpoint="edit")
 @bp.route("/tasks/<int:task_id>", methods=["POST"], endpoint="edit")
 def task_edit(task_id):
     """Render the edit form for one task, or save an edited one.
@@ -398,7 +412,9 @@ def task_edit(task_id):
     if task is None:
         abort(404)
 
-    if request.method == "GET":
+    # As in task_create: HEAD is implicit on the GET rule, so only the POST rule
+    # reaches the write branch and a HEAD probe gets the form a GET renders.
+    if request.method != "POST":
         return _render_task_form(task=task, values=_stored_task_values(task))
 
     values, errors = parse_task_form(request.form, projects.get_project())
@@ -446,8 +462,11 @@ def task_set_assignee(task_id):
     assignee is resolved next, and the carried filters are validated before
     ``app.services.tasks.set_assignee`` writes. An empty ``assignee_id`` is how the
     interface clears an assignment, and it is the only value that is not a member
-    id: everything else must name a member, which ``app.services.members.get_member``
-    is the authority on, so an id that does not exist is a 400 rather than a write.
+    id: everything else must name a member, which
+    :func:`app.validation.resolve_member_id` is the authority on -- the same rule
+    the task form's Assignee field, the assignee filter and the comment author go
+    through, so this control accepts exactly their spellings rather than whatever
+    ``int()`` would coerce.
     """
     if task_service.get_task(task_id) is None:
         abort(404)
@@ -455,11 +474,8 @@ def task_set_assignee(task_id):
     submitted = (request.form.get(_ASSIGNEE_FIELD) or "").strip()
     member_id: int | None = None
     if submitted:
-        try:
-            member_id = int(submitted)
-        except ValueError:
-            abort(400, description=_MSG_INVALID_ASSIGNEE)
-        if members.get_member(member_id) is None:
+        member_id = resolve_member_id(submitted)
+        if member_id is None:
             abort(400, description=_MSG_INVALID_ASSIGNEE)
 
     origin = _origin()

@@ -205,9 +205,11 @@ one area, skip it for speed:
 There is no JSON API. The application's whole external contract is twelve endpoints that
 accept HTML form posts and return HTML pages, and requests are
 `application/x-www-form-urlencoded`. Every field arrives as a string and is parsed and
-typed in `app/validation.py`. Two of the form paths below, `/tasks/new` and
-`/tasks/<id>/edit`, also accept a post on themselves, so the application serves fourteen
-method-and-path rules in all for these twelve contract endpoints.
+typed in `app/validation.py`. The twelve contract endpoints below are served by
+twelve method-and-path shapes over eleven URL rules, one method per rule: `/tasks`
+and `/tasks/<id>` each carry a read rule and a write rule beside each other, while
+the two form paths `/tasks/new` and `/tasks/<id>/edit` are reads only, so a post to
+either is a method mismatch rather than a write path.
 
 | Method and path | Input | Response |
 |-----------------|-------|----------|
@@ -247,8 +249,8 @@ How the responses behave:
   Any other origin, a missing one included, redirects to the task's detail page. No
   endpoint accepts a `next` or any other redirect target from the request.
 - **The create and edit forms post to the paths above**, `POST /tasks` and
-  `POST /tasks/<id>`. The same two views also accept a post on their own form path,
-  `/tasks/new` and `/tasks/<id>/edit`.
+  `POST /tasks/<id>`, which are the only write paths for them. `/tasks/new` and
+  `/tasks/<id>/edit` are reads that render the form; neither accepts a post.
 
 A successful write flashes one message, rendered under the header with `role="status"`;
 a rejected one puts its message beside the field instead, so the two outcomes are never
@@ -428,8 +430,8 @@ five minutes and exercises every control the project was asked to make work.
 │   │   ├── members.py          #   list_members, get_member
 │   │   ├── tasks.py            #   list_tasks, get_task, create_task, update_task, set_status, set_assignee
 │   │   ├── comments.py         #   list_comments, add_comment
-│   │   └── metrics.py          #   dashboard_metrics
-│   ├── blueprints/             # The twelve contract endpoints, plus a post on each form path:
+│   │   └── metrics.py          #   dashboard_metrics, total_task_count
+│   ├── blueprints/             # The blueprints behind the twelve contract endpoints:
 │   │                           #   parse, call one service, render or redirect
 │   │   ├── dashboard.py        #   GET /
 │   │   ├── tasks.py            #   the list, create, detail, edit, status, assign and comment routes

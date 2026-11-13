@@ -28,7 +28,7 @@ import logging
 import os
 import sqlite3
 
-from flask import Flask, render_template
+from flask import Flask, Request, Response, redirect, render_template, request, url_for
 from werkzeug.exceptions import HTTPException
 
 from app import config, db, templating
@@ -42,6 +42,40 @@ __all__ = ["create_app"]
 # application writes nothing else at start-up: this project runs no structured
 # logging layer, and the resolved path is the one fact worth having in the log.
 _STARTUP_MESSAGE = "Taskboard ready; database at %s"
+
+# The endpoints that answer a form post and no read request: the two quick actions
+# and the comment post on the task detail page. A read of one of them belongs on the
+# task page the action hangs off, which is what the 405 handler below sends it to.
+_WRITE_ONLY_TASK_ENDPOINTS = frozenset(
+    {"tasks.add_comment", "tasks.set_assignee", "tasks.set_status"}
+)
+
+
+def _task_id_for_write_action(app: Flask, request_obj: Request) -> int | None:
+    """Return the task a write-only action path names, or None for any other path.
+
+    The path is matched against the application's own URL map as the post it would
+    answer, so the endpoint and the task id are the ones Flask itself binds rather
+    than anything read back out of the request's text.
+
+    Args:
+        app: The application whose URL map is matched against.
+        request_obj: The request whose path is being read.
+
+    Returns:
+        The task id behind a route in :data:`_WRITE_ONLY_TASK_ENDPOINTS`, or
+        ``None`` when the path is not one such route.
+    """
+    try:
+        endpoint, arguments = app.url_map.bind_to_environ(request_obj.environ).match(
+            method="POST"
+        )
+    except HTTPException:
+        return None
+    if endpoint not in _WRITE_ONLY_TASK_ENDPOINTS:
+        return None
+    task_id = arguments.get("task_id")
+    return task_id if isinstance(task_id, int) else None
 
 
 def create_app(test_config: dict[str, object] | None = None) -> Flask:
@@ -60,8 +94,9 @@ def create_app(test_config: dict[str, object] | None = None) -> Flask:
         :mod:`app.models` and ``FIELD_LIMITS`` from :mod:`app.validation`, so a
         template reads the shared vocabulary rather than restating it -- the three
         blueprints mounted at the paths their routes declare, the two database
-        commands available to the CLI, and the 400, 404 and 500 handlers rendering
-        the application's own error pages.
+        commands available to the CLI, the 400, 404 and 500 handlers rendering the
+        application's own error pages, and the handler that keeps a read of a
+        write-only task action inside the shell.
 
     Raises:
         click.ClickException: When the configured ``DATABASE`` cannot be used:
@@ -139,6 +174,25 @@ def create_app(test_config: dict[str, object] | None = None) -> Flask:
     def server_error(error: HTTPException) -> tuple[str, int]:
         """Render the 500 page so an unexpected failure is never a traceback."""
         return render_template("errors/500.html", error=error), 500
+
+    @app.errorhandler(405)
+    def method_not_allowed(error: HTTPException) -> Response | HTTPException:
+        """Send a read of a write-only task action to the task page it belongs to.
+
+        A rejected data-entry post re-renders its own form at 200, so the address bar
+        keeps the path it posted to. A GET of one of the three task actions -- a
+        bookmark, a hand-typed URL, a reload whose resubmission was cancelled --
+        would otherwise be answered by Werkzeug's own 405 page, which sits outside
+        the application's shell. The route that would have answered the post names
+        the task, so the reviewer is sent to that task's page through ``url_for``;
+        every other method mismatch keeps the default response, because no page for
+        it is part of this product.
+        """
+        if request.method in ("GET", "HEAD"):
+            task_id = _task_id_for_write_action(app, request)
+            if task_id is not None:
+                return redirect(url_for("tasks.detail", task_id=task_id))
+        return error
 
     app.logger.info(_STARTUP_MESSAGE, app.config["DATABASE"])
     return app
