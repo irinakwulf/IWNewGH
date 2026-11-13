@@ -1,0 +1,38 @@
+{#-
+  The unhandled-error page, rendered by create_app's @app.errorhandler(500).
+
+  What this page may say is the whole point of it. An unexpected failure hands the
+  template an InternalServerError, and that object also carries the original
+  exception, its repr and its args. None of those are rendered here and none may be
+  added: an exception message or a stack trace on this page would expose the
+  application's internals, and this project requires that no unexpected failure
+  reaches the visitor as one. Only the failure's own code, name and standard
+  description are read -- all three are generic by construction, so the page says
+  what happened without naming what broke or repeating anything a request supplied.
+
+  The handler answers with status 500 whatever this file renders, so the page only
+  has to be readable and offer a way back. The header, navigation, `.container` and
+  footer come from base.html, which stays around the failure so the visitor can
+  still reach every screen; the link below is that way back, and it is secondary
+  because a failed request has no primary action to retake. There is deliberately
+  no retry control, no form, no error id and no log excerpt: a retry would resend
+  the request that just failed, and the rest is monitoring this tool does not have.
+
+  Its classes -- `.empty-state`, `.row` and `.button--secondary` -- are the ones
+  app/static/css/app.css defines, and every visual value comes from there. This
+  file carries no inline presentation attribute, no script element and no event
+  handler attribute, because the application ships no JavaScript at all.
+-#}
+{% extends "base.html" %}
+
+{% block title %}{{ error.name }} ({{ error.code }}){% endblock %}
+
+{% block content %}
+<div class="empty-state">
+  <h1>{{ error.name }} ({{ error.code }})</h1>
+  <p>{{ error.description }}</p>
+  <div class="row">
+    <a class="button button--secondary" href="{{ url_for('dashboard.index') }}">Back to the dashboard</a>
+  </div>
+</div>
+{% endblock %}
