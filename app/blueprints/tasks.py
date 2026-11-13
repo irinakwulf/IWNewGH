@@ -330,8 +330,16 @@ def task_list():
     )
 
 
-@bp.route("/tasks", methods=["POST"], endpoint="create")
+# The pair's rules are registered bottom-up, so the contract's collection path is
+# declared last and registers first. That order decides what a method-aware
+# `url_for` builds: both rules of this endpoint accept POST, and werkzeug returns
+# the first rule whose methods accept the requested one, so declaring
+# `POST /tasks` first is what makes `url_for("tasks.create", _method="POST")` -- the
+# action the task form submits to -- build `/tasks` instead of `/tasks/new`. A plain
+# `url_for` is unaffected: with no method it looks for a GET rule first, and only
+# the form path accepts GET.
 @bp.route("/tasks/new", methods=["GET", "POST"], endpoint="create")
+@bp.route("/tasks", methods=["POST"], endpoint="create")
 def task_create():
     """Render the empty create form, or create a task from a submitted one.
 
@@ -371,8 +379,12 @@ def task_detail(task_id):
     return _render_task_detail(task)
 
 
-@bp.route("/tasks/<int:task_id>", methods=["POST"], endpoint="edit")
+# Registered in the same order as the create pair above, and for the same reason:
+# `url_for("tasks.edit", task_id=..., _method="POST")` -- the edit form's action --
+# builds `/tasks/<id>`, while the plain build keeps selecting the GET rule and
+# `/tasks/<id>/edit`.
 @bp.route("/tasks/<int:task_id>/edit", methods=["GET", "POST"], endpoint="edit")
+@bp.route("/tasks/<int:task_id>", methods=["POST"], endpoint="edit")
 def task_edit(task_id):
     """Render the edit form for one task, or save an edited one.
 

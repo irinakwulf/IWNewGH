@@ -1,0 +1,108 @@
+{#
+  The task form: the create screen and the edit screen, from one template.
+
+  app/blueprints/tasks.py renders this file from three places and two screens --
+  `GET /tasks/new` with `task` None, `GET /tasks/<id>/edit` with the stored task,
+  and the re-render both of those views perform when a submission is rejected.
+  `task` decides only which of the two screens is being shown: the heading, the
+  form's action and nothing else. Every control takes its content from `values`,
+  because `values` already carries the stored task on a first render and the
+  reviewer's submitted text after a rejection -- which is what brings the form
+  back filled in, with only the offending field flagged.
+
+  The action is always a POST rule of the endpoint this screen belongs to, built
+  with `url_for(..., _method='POST')` rather than written as a path: the create
+  endpoint serves both `POST /tasks` and the `GET|POST` path this form was
+  rendered from, and the edit endpoint likewise pairs `POST /tasks/<id>` with
+  `GET|POST /tasks/<id>/edit`. Naming the endpoint and the method keeps the two
+  paths in app/blueprints/tasks.py the single source of both URLs, so a route
+  change cannot leave a dead `action` attribute here.
+
+  Nothing in this file decides a rule. The five control names are exactly the keys
+  app.validation.parse_task_form reads -- title, description, assignee_id, status
+  and deadline -- and every message comes from the parser through the two macros
+  in partials/_field_errors.html: `error_summary` above the form lists every
+  problem at once, and `field_error(errors, 'title')` renders the one sentence
+  beside that field, owning the `<field>-error` id a control points at with
+  `aria-describedby`. No message string is written here, and `errors` being empty
+  is the only thing that keeps the aria wiring off a control.
+
+  The three status options are the closed set of app/models.py in the schema's
+  order, their text coming from the `status_label` filter so STATUS_LABELS stays
+  the single source of the words. The assignee select's first option is the empty
+  value labelled "Unassigned", and that empty value is how an assignment is
+  cleared -- the parser reads it as `None` rather than as a missing member. The
+  deadline is a plain date input round-tripping the stored `YYYY-MM-DD` text; no
+  date is parsed or formatted here.
+
+  `required` and `maxlength` are declared for semantics and for the browser's
+  convenience, and `novalidate` on the form makes sure the application's own
+  messages are what a reviewer sees: app.validation rules that those attributes
+  are convenience only, never the control, so a submission that bypasses them --
+  an empty title, an over-long one -- must reach the parser and come back with its
+  sentence beside the field rather than being stopped by a browser bubble.
+
+  The form carries no hidden navigation field. A data-entry post names no target:
+  the view redirects to the task it saved, so there is nothing for the request to
+  choose between and no redirect target any submission could supply. No script, no
+  inline handler and no autoescaping bypass appears here either -- Jinja escapes
+  every value this file renders, so a title or description containing markup is
+  text.
+#}
+{% extends "base.html" %}
+{% from "partials/_field_errors.html" import error_summary, field_error %}
+
+{% block title %}{% if task %}Edit task{% else %}New task{% endif %}{% endblock %}
+
+{% block content %}
+  <h1>{% if task %}Edit task{% else %}New task{% endif %}</h1>
+
+  {{ error_summary(errors) }}
+
+  <form class="stack" method="post" action="{% if task %}{{ url_for('tasks.edit', task_id=task.id, _method='POST') }}{% else %}{{ url_for('tasks.create', _method='POST') }}{% endif %}" novalidate>
+    <div class="stack">
+      <label for="title">Title</label>
+      <input class="input" type="text" id="title" name="title" value="{{ values.title|default('', true) }}" maxlength="200" required{% if errors and errors.get('title') %} aria-invalid="true" aria-describedby="title-error"{% endif %}>
+      {{ field_error(errors, 'title') }}
+    </div>
+
+    <div class="stack">
+      <label for="description">Description</label>
+      <textarea class="textarea" id="description" name="description" rows="4" maxlength="2000"{% if errors and errors.get('description') %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description|default('', true) }}</textarea>
+      {{ field_error(errors, 'description') }}
+    </div>
+
+    <div class="stack">
+      <label for="assignee_id">Assignee</label>
+      <select class="select" id="assignee_id" name="assignee_id"{% if errors and errors.get('assignee_id') %} aria-invalid="true" aria-describedby="assignee_id-error"{% endif %}>
+        <option value=""{% if not values.assignee_id %} selected{% endif %}>Unassigned</option>
+        {% for member in members %}
+        <option value="{{ member.id }}"{% if values.assignee_id is not none and values.assignee_id|string == member.id|string %} selected{% endif %}>{{ member.name }}</option>
+        {% endfor %}
+      </select>
+      {{ field_error(errors, 'assignee_id') }}
+    </div>
+
+    <div class="stack">
+      <label for="status">Status</label>
+      <select class="select" id="status" name="status"{% if errors and errors.get('status') %} aria-invalid="true" aria-describedby="status-error"{% endif %}>
+        {% for option in ['pending', 'in_progress', 'completed'] %}
+        <option value="{{ option }}"{% if values.status|default('pending', true) == option %} selected{% endif %}>{{ option|status_label }}</option>
+        {% endfor %}
+      </select>
+      {{ field_error(errors, 'status') }}
+    </div>
+
+    <div class="stack">
+      <label for="deadline">Deadline</label>
+      <input class="input" type="date" id="deadline" name="deadline" value="{{ values.deadline|default('', true) }}"{% if errors and errors.get('deadline') %} aria-invalid="true" aria-describedby="deadline-error"{% endif %}>
+      <p>Optional; a deadline may not be earlier than the project start date.</p>
+      {{ field_error(errors, 'deadline') }}
+    </div>
+
+    <div class="row">
+      <button class="button button--primary" type="submit">Save task</button>
+      <a class="button button--secondary" href="{{ url_for('tasks.list') }}">Cancel</a>
+    </div>
+  </form>
+{% endblock %}
