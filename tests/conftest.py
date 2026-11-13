@@ -33,6 +33,29 @@ DATABASE_FILENAME = "taskboard.sqlite3"
 # ``app/config.py`` supplies when ``SECRET_KEY`` is unset.
 TEST_SECRET_KEY = "test-secret-key"
 
+# How the interface spells a month: three English letters, indexed by
+# ``date.month - 1``. This is the suite's one statement of the rule -- an
+# expectation never takes a month name from ``strftime("%b")``, because that
+# follows the process locale while the interface, and the month table in
+# ``app.templating``, are English only: a host whose ``LC_TIME`` names months
+# differently would otherwise fail a correct render.
+# Test modules import these names; ``tests/test_dashboard.py`` alone copies them
+# because this file imports Flask, and points back here -- no module restates it.
+MONTH_ABBREVIATIONS: tuple[str, ...] = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+
 
 @pytest.fixture
 def db_path(tmp_path: Path) -> str:

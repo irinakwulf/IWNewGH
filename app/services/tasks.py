@@ -23,14 +23,8 @@ filled. The join is a ``LEFT JOIN`` on purpose -- an unassigned task must stay i
 the list with ``assignee_name`` of ``None``, which the templates render as
 "Unassigned", instead of disappearing from it.
 
-That one projection serves the single-row reads as well -- :func:`get_task` and the
-re-read every mutation performs -- although only the task list displays the comment
-count. Splitting the count out of them was considered and rejected: a second,
-count-less projection would have to be kept in step with the first, and the same
-task would then read a ``comment_count`` of 0 through :func:`get_task` and 2 through
-:func:`list_tasks`, which is precisely the disagreement the shared shape prevents.
-What the count costs a single-row read is one index seek, served by the
-``comment(task_id)`` index, and that was weighed and accepted at this scale.
+:func:`get_task` and the re-read every mutation performs use that same projection,
+so a task cannot read one way on the detail view and another way in the list.
 
 Boundaries owned by other layers are deliberately absent. Parsing, trimming and
 the character bounds live in :mod:`app.validation`, which also parses the ISO-8601
@@ -53,7 +47,7 @@ from collections.abc import Mapping
 from datetime import date, timedelta
 from typing import Any
 
-from app.db import get_db
+from app.db import get_db, is_sqlite_integer
 from app.models import Task
 from app.services import projects
 
@@ -85,13 +79,6 @@ _UNASSIGNED = "unassigned"
 # uses for its "soon" state, so the filter and the word beside a deadline cannot
 # disagree about which work is imminent.
 _WEEK_WINDOW_DAYS = 6
-
-# The bounds of the signed 64-bit INTEGER a SQLite column stores, so no row id can
-# lie outside them. An id beyond them cannot be a task, and it must not reach a
-# bind: sqlite3 raises OverflowError for such a value rather than matching no row,
-# which would turn the route's 404 into a 500.
-_SQLITE_INTEGER_MIN = -(2**63)
-_SQLITE_INTEGER_MAX = 2**63 - 1
 
 # The projection and join every task read shares, so the list, the detail view and
 # the re-read after a write cannot disagree about which columns a Task needs. Only
@@ -253,10 +240,9 @@ def get_task(task_id: int) -> Task | None:
         ``None`` rather than raised, because the route is what decides whether an
         unknown id is a 404.
     """
-    # Refuse an id no SQLite INTEGER can hold before the statement is prepared: the
-    # bind would raise OverflowError, and an id that cannot be a row is simply not a
-    # task -- the same answer as a missing one.
-    if not _SQLITE_INTEGER_MIN <= task_id <= _SQLITE_INTEGER_MAX:
+    # An id no SQLite INTEGER can hold is not a task, and it must never reach a
+    # bind: :func:`app.db.is_sqlite_integer` is the one home of that rule.
+    if not is_sqlite_integer(task_id):
         return None
     row = get_db().execute(_SELECT_TASK, (task_id,)).fetchone()
     if row is None:
@@ -330,6 +316,8 @@ def update_task(task_id: int, values: Mapping[str, Any]) -> Task | None:
         The row count of the statement is deliberately not consulted: an edit that
         changes no value is still a successful edit.
     """
+    if not is_sqlite_integer(task_id):
+        return None
     connection = get_db()
     connection.execute(
         _UPDATE_TASK,
@@ -360,6 +348,8 @@ def set_status(task_id: int, status: str) -> Task | None:
         The updated :class:`app.models.Task` with its refreshed ``updated_at``, or
         ``None`` when no task has ``task_id``, in which case nothing was written.
     """
+    if not is_sqlite_integer(task_id):
+        return None
     connection = get_db()
     connection.execute(_SET_TASK_STATUS, (status, task_id))
     connection.commit()
@@ -380,6 +370,8 @@ def set_assignee(task_id: int, member_id: int | None) -> Task | None:
         its ``assignee_name`` reflecting the new assignment, or ``None`` when no
         task has ``task_id``, in which case nothing was written.
     """
+    if not is_sqlite_integer(task_id):
+        return None
     connection = get_db()
     connection.execute(_SET_TASK_ASSIGNEE, (member_id, task_id))
     connection.commit()

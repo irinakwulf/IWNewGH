@@ -39,12 +39,10 @@ def index():
     """Render the dashboard from the metric and the project service.
 
     ``app.services.metrics.dashboard_metrics()`` supplies the counts and
-    ``app.services.projects.get_project()`` the project panel. ``dashboard.html``
-    is written against exactly those two names: ``metrics`` carries the ``total``,
-    ``completed``, ``pending`` and ``in_progress`` counts, whose ``total`` chooses
-    between the create control and the dashboard's own empty state, and
-    ``project`` is the stored :class:`app.models.Project` or ``None`` while no
-    project details have been recorded yet.
+    ``app.services.projects.get_project()`` the project panel, and nothing is
+    computed here: both results are handed to ``dashboard.html`` unchanged. The
+    render contract those two results are handed over under -- the context names
+    and what each one holds -- is stated at the top of that template.
 
     Returns:
         The rendered dashboard with the default 200 status. The route accepts no

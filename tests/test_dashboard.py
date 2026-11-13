@@ -97,13 +97,12 @@ EMPTY_TASK_AREA_ACTION = "Create the first task"
 SEED_COMMAND_HINT = "flask --app app seed-db"
 EMPTY_PROJECT_HEADING = "No project details yet."
 
-# The project panel's dates read as ``D Mon YYYY`` -- "26 Oct 2026" -- so the day
-# is not zero-padded and the month is one of these twelve three-letter English
-# names, indexed by ``date.month - 1``. Spelled out rather than taken from
-# ``strftime("%b")``, which follows the process locale: the interface ships in
-# English only, so a correct render must not move with the host's ``LC_TIME`` and
-# neither may the expectation derived from it.
-MONTHS: tuple[str, ...] = (
+# The project panel's dates read as ``D Mon YYYY`` -- "26 Oct 2026" -- so the day is
+# not zero-padded and the month is one of the twelve English names below, indexed by
+# ``date.month - 1``. ``tests/conftest.py`` states the rule once; the names are copied
+# here rather than imported from it because that file imports Flask, and this module's
+# docstring promises it imports no Flask module.
+MONTH_ABBREVIATIONS: tuple[str, ...] = (
     "Jan",
     "Feb",
     "Mar",
@@ -320,8 +319,8 @@ def formatted_date(iso_date: str) -> str:
 
     The panel renders each stored date through the ``format_date`` filter, so the
     expectation formats the same stored value the same way: no zero-padding on the
-    day, and the English month name taken from :data:`MONTHS` rather than from
-    ``strftime``, which follows the process locale.
+    day, and the English month name taken from :data:`MONTH_ABBREVIATIONS` rather
+    than from ``strftime``, which follows the process locale.
 
     Args:
         iso_date: A date as the seed stored it, ``YYYY-MM-DD``.
@@ -330,7 +329,7 @@ def formatted_date(iso_date: str) -> str:
         The date as the project panel renders it.
     """
     day = date.fromisoformat(iso_date)
-    return f"{day.day} {MONTHS[day.month - 1]} {day.year}"
+    return f"{day.day} {MONTH_ABBREVIATIONS[day.month - 1]} {day.year}"
 
 
 def first_seeded_title(status: str) -> str:

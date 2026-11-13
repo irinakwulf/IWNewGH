@@ -13,7 +13,9 @@
              "start_date" and "end_date". On a GET they are the stored text; after a
              rejected post they are what the reviewer submitted, which is why the
              controls read `values` and never `project`, so a rejected submission comes
-             back with every field filled in instead of blank.
+             back filled in instead of blank -- except the one text a control cannot
+             hold, a date no calendar field can display, which the echo below states
+             back in its place.
     errors   the {field: message} mapping app.validation.parse_project_form returns,
              empty when the submission was accepted. The messages are the parser's own
              words, rendered by the two macros imported below and never reworded here.
@@ -21,7 +23,9 @@
   Dates are the one stored value not shown as-is. The definition list pipes each date
   through the format_date filter ("26 Oct 2026"), while the two date controls take the
   raw ISO-8601 text in their value attributes, because that is the only form an
-  <input type="date"> reads.
+  <input type="date"> reads -- and a submitted text the control cannot display is
+  withheld from `value` and stated back beside the field instead, so a rejected date is
+  never lost.
 
   Nothing here is the control for a rule. The length bounds, the date formats and the
   rule that the end date cannot precede the start date live in app/validation.py; the
@@ -92,16 +96,38 @@
       <div class="stack">
         <div>
           <label for="start_date">Start date</label>
-          <input class="input" type="date" id="start_date" name="start_date" value="{{ values.start_date }}" required aria-describedby="{% if errors and errors.start_date %}start_date-error {% endif %}start_date-hint"{% if errors and errors.start_date %} aria-invalid="true"{% endif %}>
+          {# A date input shows a full YYYY-MM-DD date and nothing else: handed any
+             other text it renders empty, so a rejected entry would be lost from the
+             one control that cannot hold it. `start_date_submitted` is the text the
+             reviewer sent and `start_date_unshowable` is true exactly when that text
+             is one the field cannot show, which is the case the echo below states
+             back beside the field. The value attribute is withheld for that text: a
+             date input is required to ignore a value it cannot display, so writing
+             it there would put an invalid value in the document and show nothing. #}
+          {% set start_date_submitted = values.start_date|default('', true) %}
+          {% set start_date_unshowable = start_date_submitted and (not start_date_submitted|format_date or start_date_submitted|length != 10 or start_date_submitted[4] != '-' or start_date_submitted[7] != '-') %}
+          <input class="input" type="date" id="start_date" name="start_date" value="{% if not start_date_unshowable %}{{ start_date_submitted }}{% endif %}" required aria-describedby="{% if errors and errors.start_date %}start_date-error {% endif %}{% if start_date_unshowable %}start_date-submitted {% endif %}start_date-hint"{% if errors and errors.start_date %} aria-invalid="true"{% endif %}>
           {{ field_error(errors, 'start_date') }}
+          {% if start_date_unshowable %}
+          <p id="start_date-submitted">You entered &ldquo;{{ start_date_submitted }}&rdquo;. This field shows a calendar date only, so the date must be entered again.</p>
+          {% endif %}
         </div>
         <p id="start_date-hint">Pick a date with the calendar button, or type it in the order the field's segments show.</p>
       </div>
       <div class="stack">
         <div>
           <label for="end_date">End date</label>
-          <input class="input" type="date" id="end_date" name="end_date" value="{{ values.end_date }}" required aria-describedby="{% if errors and errors.end_date %}end_date-error {% endif %}end_date-hint"{% if errors and errors.end_date %} aria-invalid="true"{% endif %}>
+          {# The end date is treated exactly as the start date above: the same
+             condition decides whether the control can show the submitted text, the
+             value attribute is withheld for it when it cannot, and the echo states
+             the entry back. #}
+          {% set end_date_submitted = values.end_date|default('', true) %}
+          {% set end_date_unshowable = end_date_submitted and (not end_date_submitted|format_date or end_date_submitted|length != 10 or end_date_submitted[4] != '-' or end_date_submitted[7] != '-') %}
+          <input class="input" type="date" id="end_date" name="end_date" value="{% if not end_date_unshowable %}{{ end_date_submitted }}{% endif %}" required aria-describedby="{% if errors and errors.end_date %}end_date-error {% endif %}{% if end_date_unshowable %}end_date-submitted {% endif %}end_date-hint"{% if errors and errors.end_date %} aria-invalid="true"{% endif %}>
           {{ field_error(errors, 'end_date') }}
+          {% if end_date_unshowable %}
+          <p id="end_date-submitted">You entered &ldquo;{{ end_date_submitted }}&rdquo;. This field shows a calendar date only, so the date must be entered again.</p>
+          {% endif %}
         </div>
         <p id="end_date-hint">Pick a date with the calendar button, or type it in the order the field's segments show.</p>
       </div>

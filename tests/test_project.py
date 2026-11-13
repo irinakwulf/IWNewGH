@@ -46,6 +46,9 @@ from flask.testing import FlaskClient
 
 import seed
 from app.db import get_db
+# The one statement of how the suite spells a month lives in ``tests/conftest.py``;
+# this module imports the names from there rather than restating the rule.
+from conftest import MONTH_ABBREVIATIONS
 
 # ---------------------------------------------------------------------------
 # The interface's words. Asserted as equal substrings of the rendered page, so a
@@ -135,9 +138,12 @@ def offset_rendered(days: int) -> str:
 
     The interface shows a date as ``26 Oct 2026`` -- an unpadded day, a three-letter
     month and a four-digit year -- which is what this reproduces from the date alone.
+    The month comes from ``MONTH_ABBREVIATIONS``, the English names
+    ``tests/conftest.py`` states once, rather than from ``strftime``, which follows
+    the host's locale.
     """
     day = offset_day(days)
-    return f"{day.day} {day.strftime('%b %Y')}"
+    return f"{day.day} {MONTH_ABBREVIATIONS[day.month - 1]} {day.year}"
 
 
 def day_first(iso_text: str) -> str:
@@ -544,6 +550,53 @@ def test_a_rejected_project_field_is_flagged_for_assistive_technology(
     assert name.get("aria-invalid") == "true"
     assert name.get("aria-describedby") == "name-error"
     assert stored_project(rows) == before
+
+
+# The two date controls, one case each. The text they are given is derived in the test
+# rather than written here, because it is a real date in a shape the product refuses.
+UNSHOWABLE_PROJECT_DATES = (
+    pytest.param("start_date", id="start-date"),
+    pytest.param("end_date", id="end-date"),
+)
+
+
+@pytest.mark.parametrize("control_id", UNSHOWABLE_PROJECT_DATES)
+def test_a_rejected_project_date_is_echoed_beside_the_field(
+    seeded_client: FlaskClient, rows: Rows, control_id: str
+) -> None:
+    """A date the control cannot display comes back stated beside the field.
+
+    HTML defines a date input's value as empty unless it is a valid date string, so the
+    text a rejected post carries for a date that did not parse reaches the control and
+    renders blank: the one field whose entry a re-render would otherwise lose. The form
+    therefore states the entry back in its own paragraph, gives that paragraph an id,
+    and names that id in the control's ``aria-describedby`` after the message, so what
+    was typed is still on the page and announced with the field it belongs to.
+
+    The value attribute is asserted as well: it is left empty for this text, because a
+    date input is required to ignore a value it cannot display, so the paragraph is the
+    one place the entry is carried instead of an attribute the control would discard.
+    """
+    before = stored_project(rows)
+    submitted = day_first(offset_iso(5))
+
+    response = seeded_client.post(
+        PROJECT_PATH, data=valid_form(**{control_id: submitted})
+    )
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert MSG_INVALID_DATE in html
+    assert stored_project(rows) == before
+    control = control_attributes(html, control_id)
+    assert control.get("value") == ""
+    echoed = re.search(rf'<p id="{control_id}-submitted">(.*?)</p>', html, re.DOTALL)
+    assert echoed is not None, "the rejected date was not echoed beside the field"
+    assert submitted in unescape(echoed.group(1))
+    assert control.get("aria-describedby") == (
+        f"{control_id}-error {control_id}-submitted {control_id}-hint"
+    )
+    assert control.get("aria-invalid") == "true"
 
 
 def test_end_date_before_start_date_is_rejected(

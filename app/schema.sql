@@ -14,15 +14,23 @@ DROP TABLE IF EXISTS member;
 DROP TABLE IF EXISTS project;
 
 -- The single project record. CHECK (id = 1) makes "one project" a rule of the
--- schema rather than a convention: a second row is rejected outright. Dates are
--- ISO-8601 text (YYYY-MM-DD); start_date <= end_date is enforced by
--- app/validation.py, which owns the message the reviewer sees.
+-- schema rather than a convention: a second row is rejected outright. Each date
+-- is ISO-8601 text (YYYY-MM-DD) for a day that exists, checked here as well as in
+-- app/validation.py, since a row another path wrote would otherwise hold a date
+-- the deadline rule cannot compare; start_date <= end_date stays there, with the
+-- message the reviewer sees.
 CREATE TABLE project (
     id          INTEGER PRIMARY KEY CHECK (id = 1),
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    start_date  TEXT NOT NULL,
-    end_date    TEXT NOT NULL,
+    start_date  TEXT NOT NULL
+                CHECK (start_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                       AND start_date >= '0001-01-01'
+                       AND start_date IS date(start_date)),
+    end_date    TEXT NOT NULL
+                CHECK (end_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                       AND end_date >= '0001-01-01'
+                       AND end_date IS date(end_date)),
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );

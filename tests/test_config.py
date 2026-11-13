@@ -8,11 +8,13 @@ from ``monkeypatch``, so no test restates a default that the module could change
 without this file noticing.
 
 Two factory behaviours are covered as well, because both are what an operator
-sees first: the start-up record naming the database a running instance serves,
-which must reach the log at the level the documented run command leaves in place,
-and a ``DATABASE`` value the process cannot use, which must arrive as one
-readable line naming the setting, the resolved path and the fix rather than as a
-library traceback.
+sees first: the start-up record, which must reach the log at the level the
+documented run command leaves in place and must name no resolved path, and a
+``DATABASE`` value the process cannot use, which must arrive as one readable line
+naming the setting, the resolved path and the fix rather than as a library
+traceback. The path is not lost from the log, only moved: a caller that sets the
+``app`` logger to ``DEBUG`` before the factory runs still gets the file the
+instance serves, in a second record that level alone emits.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from app.config import (
 # The two variables the module reads, and the only two it may read.
 ENVIRONMENT_VARIABLES = ("DATABASE", "SECRET_KEY")
 
-# The five keys the mapping holds, fixed by the plan's configuration contract.
+# The five keys ``app.config.config_mapping`` returns, and no others.
 MAPPING_KEYS = {
     "DATABASE",
     "SECRET_KEY",
@@ -53,9 +55,13 @@ PUBLIC_NAMES = {
     "resolve_database_path",
 }
 
-# The prefix of the application's single start-up record, which ends with the
-# resolved database path.
-STARTUP_PREFIX = "Taskboard ready; database at "
+# The application's single start-up record, which names the event and no path.
+STARTUP_MESSAGE = (
+    "Taskboard ready; database initialised from the configured DATABASE setting"
+)
+
+# The DEBUG record that carries the resolved path, for a caller that asks for it.
+STARTUP_PATH_PREFIX = "Serving database at "
 
 # The record the schema bootstrap writes when it has just applied the schema.
 SCHEMA_APPLIED_PREFIX = "Applied database schema from "
@@ -216,14 +222,17 @@ def test_module_exports_only_its_public_names() -> None:
     assert "os" not in app.config.__all__
 
 
-def test_create_app_logs_the_resolved_database_at_the_default_level(
+def test_create_app_logs_the_start_up_event_without_the_resolved_path(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The start-up and schema-applied records reach the log without raising logging.
+    """The start-up record reaches the log at the run command's level, naming no path.
 
     ``flask --app app run`` configures no logging of its own, so the application
-    logger's level is the only thing that decides whether an operator sees which
-    database the instance serves.
+    logger's level is the only thing that decides whether an operator sees the
+    start-up event, and the schema bootstrap's record is what a fresh checkout
+    writes alongside it. The database the instance serves is the one fact the
+    application log does not carry at this level: the resolved path is the
+    operator's own filesystem and belongs in the DEBUG record alone.
     """
     database = str(tmp_path / "startup.sqlite3")
     caplog.set_level(logging.INFO)
@@ -232,10 +241,37 @@ def test_create_app_logs_the_resolved_database_at_the_default_level(
 
     assert application.logger.level == logging.INFO
     messages = [record.getMessage() for record in caplog.records]
-    assert f"{STARTUP_PREFIX}{database}" in messages
+    assert STARTUP_MESSAGE in messages
     assert any(
         message.startswith(SCHEMA_APPLIED_PREFIX) for message in messages
     ), "the schema bootstrap's own record must reach the log too"
+    assert not any(database in message for message in messages), (
+        "no INFO record may name the resolved database path"
+    )
+
+
+def test_create_app_logs_the_resolved_path_only_when_debug_is_requested(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A caller that sets ``app`` to DEBUG keeps that level and gets the resolved path.
+
+    The factory raises a NOTSET logger to INFO so the documented run command shows
+    its records; a level the caller has already chosen states what that caller
+    wants, so it is left alone, and DEBUG is what makes the second record -- the
+    one naming the file the instance serves -- reach the log at all.
+    """
+    database = str(tmp_path / "debug.sqlite3")
+    caplog.set_level(logging.DEBUG, logger="app")
+
+    application = create_app({"DATABASE": database, "TESTING": True})
+
+    assert application.logger.level == logging.DEBUG
+    debug_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.DEBUG
+    ]
+    assert f"{STARTUP_PATH_PREFIX}{database}" in debug_messages
 
 
 @UNUSABLE_DATABASE_CASES

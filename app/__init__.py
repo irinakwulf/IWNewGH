@@ -38,10 +38,19 @@ from app.validation import ASSIGNEE_UNASSIGNED, DEADLINE_FILTERS, FIELD_LIMITS
 
 __all__ = ["create_app"]
 
-# The single start-up line the application logs, naming where its data lives. The
-# application writes nothing else at start-up: this project runs no structured
-# logging layer, and the resolved path is the one fact worth having in the log.
-_STARTUP_MESSAGE = "Taskboard ready; database at %s"
+# The start-up record this factory writes at INFO: it names the event and the setting
+# behind it rather than the file it resolved, so this record carries no filesystem path.
+# The resolved path is the DEBUG record below, and the schema bootstrap writes a record
+# of its own when it has to apply the schema; this project runs no structured logging
+# layer beyond those.
+_STARTUP_MESSAGE = (
+    "Taskboard ready; database initialised from the configured DATABASE setting"
+)
+
+# The resolved path, written at DEBUG alone: a caller that sets this logger's level
+# itself gets the file the running instance serves, and every INFO record stays free
+# of it.
+_STARTUP_PATH_MESSAGE = "Serving database at %s"
 
 # The endpoints that answer a form post and no read request: the two quick actions
 # and the comment post on the task detail page. A read of one of them belongs on the
@@ -112,11 +121,13 @@ def create_app(test_config: dict[str, object] | None = None) -> Flask:
     app.config.from_mapping(config.config_mapping(test_config))
 
     # Flask leaves `app.logger` at NOTSET, so its effective level is the root logger's
-    # WARNING and the INFO records this factory and the schema bootstrap emit -- the
-    # start-up line naming the served database among them -- would be discarded at the
-    # documented run command. Raising this logger's level is all it takes: the handler
-    # and the propagation stay Flask's own, so no logging configuration is added.
-    app.logger.setLevel(logging.INFO)
+    # WARNING and the INFO records this factory and the schema bootstrap emit would be
+    # discarded at the documented run command. Raising this logger's level is all it
+    # takes: the handler and the propagation stay Flask's own, so no logging
+    # configuration is added. A level a caller has already set on this logger -- DEBUG,
+    # for the resolved path below -- is left as it is.
+    if app.logger.level == logging.NOTSET:
+        app.logger.setLevel(logging.INFO)
 
     # Absolute by the time this returns, so `makedirs` always has a real parent and
     # a test's tmp_path database is used exactly as given. Both failure paths below
@@ -202,5 +213,6 @@ def create_app(test_config: dict[str, object] | None = None) -> Flask:
                 return redirect(url_for("tasks.detail", task_id=task_id))
         return error
 
-    app.logger.info(_STARTUP_MESSAGE, app.config["DATABASE"])
+    app.logger.info(_STARTUP_MESSAGE)
+    app.logger.debug(_STARTUP_PATH_MESSAGE, app.config["DATABASE"])
     return app

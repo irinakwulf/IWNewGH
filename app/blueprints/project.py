@@ -72,14 +72,13 @@ def _values_from(project) -> dict[str, str]:
 def view():
     """Render ``project.html``; a valid post delegates to ``projects.save_project()``.
 
-    The stored record is read only on the two paths that render it: a rejected post
-    re-reads it, so the details list still shows what is in the database while the
-    form shows what the reviewer typed, and the ``GET`` needs it for the same
-    details list and for the form's prefilled values. An accepted post reads no
-    project row at all -- it confirms the save and leaves the reading to the page
-    it redirects to. A successful post flashes "Project details saved." and
-    redirects to this same endpoint -- a target named by :func:`flask.url_for`,
-    never taken from the request.
+    The stored record is read only on the two paths that render the template: the
+    ``GET``, and a rejected post, which re-reads it so the page pairs the stored
+    details with the values the reviewer submitted. An accepted post reads no
+    project row at all -- it flashes "Project details saved." and redirects to
+    this same endpoint, a target named by :func:`flask.url_for` and never taken
+    from the request. What each context variable holds is stated at the top of
+    ``project.html``.
 
     Returns:
         On ``GET``, the rendered project screen with the stored project (or

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -42,6 +43,9 @@ from app.db import get_db
 from app.models import Member
 from app.services import comments as comment_service
 from app.services import members as member_service
+# The one statement of how the suite spells a month lives in ``tests/conftest.py``;
+# this module imports the names from there rather than restating the rule.
+from conftest import MONTH_ABBREVIATIONS
 
 # ---------------------------------------------------------------------------
 # The sentences the pages must show, and the flash a successful post leaves behind.
@@ -271,13 +275,13 @@ def format_stored_timestamp(value: str) -> str:
     stored ``YYYY-MM-DD HH:MM:SS`` text is parsed against that exact layout and
     re-assembled independently -- unpadded day, a three-letter English month, and a
     zero-padded 24-hour clock -- which is the shape a rendered comment timestamp
-    must have. ``strftime("%b")`` rather than the application's month table keeps
-    the expectation out of the module it checks, and the interface ships in English
-    only, so the host locale changing the month name is itself a failure worth
-    seeing.
+    must have. The month comes from ``MONTH_ABBREVIATIONS``, the English names
+    ``tests/conftest.py`` states once, rather than from ``strftime('%b')``, which
+    follows the process locale the English-only interface does not: a non-English
+    ``LC_TIME`` must not fail a correct render.
     """
     moment = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
-    month = moment.strftime("%b")
+    month = MONTH_ABBREVIATIONS[moment.month - 1]
     return (
         f"{moment.day} {month} {moment.year}, {moment.hour:02d}:{moment.minute:02d}"
     )
@@ -354,7 +358,10 @@ def test_detail_lists_the_seeded_conversation_oldest_first(
     for comment in task["comments"]:
         assert authors[comment["author"]].name in html
         written = date.today() - timedelta(days=comment["age_days"])
-        assert f"{written.day} {written.strftime('%b %Y')}" in html
+        assert (
+            f"{written.day} {MONTH_ABBREVIATIONS[written.month - 1]} {written.year}"
+            in html
+        )
 
     assert EMPTY_COMMENTS_TEXT not in html
 
@@ -715,6 +722,49 @@ def test_add_comment_reports_an_unknown_task_as_none(app: Flask, db_path: str) -
         )
         assert result is None
         assert comment_service.list_comments(task_id) == []
+
+    assert comment_count(app) == count_before
+
+
+# The two comment functions that bind a task id, each with the answer it owes an
+# unknown task, and a real member as the author so only the task id is in question.
+# The route reads the task before it calls either of them, so a direct call is the
+# only way to reach the range guard each one holds.
+COMMENT_CALLS_ON_A_TASK_ID = (
+    pytest.param(
+        lambda task_id, author_id: comment_service.list_comments(task_id),
+        [],
+        id="list_comments",
+    ),
+    pytest.param(
+        lambda task_id, author_id: comment_service.add_comment(
+            task_id, {"author_id": author_id, "body": SURVIVING_BODY}
+        ),
+        None,
+        id="add_comment",
+    ),
+)
+
+
+@pytest.mark.parametrize(("comment_call", "expected"), COMMENT_CALLS_ON_A_TASK_ID)
+def test_a_task_id_beyond_the_integer_range_answers_as_an_unknown_task(
+    app: Flask, db_path: str, comment_call: Callable[[int, int], Any], expected: Any
+) -> None:
+    """An id SQLite cannot store is an unknown task to both comment functions.
+
+    The route answers 404 before it calls either of them, so this guard is
+    unreachable over HTTP and a direct call is what proves it is there: without it
+    the id would reach the bind, sqlite3 would raise ``OverflowError`` and the empty
+    list or ``None`` that marks an unknown task would surface as a server error. The
+    comment count is asserted with the answer, so a guard that answered after writing
+    would fail here.
+    """
+    seed.seed_database(db_path)
+    author = first_member(app)
+    count_before = comment_count(app)
+
+    with app.app_context():
+        assert comment_call(SQLITE_INTEGER_OVERFLOW, author.id) == expected
 
     assert comment_count(app) == count_before
 

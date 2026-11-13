@@ -26,10 +26,8 @@
   still in that section, and clearing the mark on the way to an error page would
   have to special-case every abort the views make.
 
-  The flash region is included bare, immediately below the header, with no
-  wrapper of its own: partials/_flash.html renders nothing when nothing has been
-  flashed and otherwise owns the `.container` that lines a message up with the
-  column below, so wrapping it here would double that container.
+  The flash region sits immediately below the header and is included on its own,
+  with no wrapper element around it: partials/_flash.html owns what it renders.
 
   Every value this file renders is a literal declared in it or a URL built by
   `url_for`; no request parameter is read and no user text reaches it, so there is

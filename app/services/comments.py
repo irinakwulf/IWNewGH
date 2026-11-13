@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from app.db import get_db
+from app.db import get_db, is_sqlite_integer
 from app.models import Comment
 
 __all__ = ["add_comment", "list_comments"]
@@ -67,6 +67,8 @@ def list_comments(task_id: int) -> list[Comment]:
         exist, because this function does not decide whether the task is there --
         the caller's existence check is what turns an unknown id into a 404.
     """
+    if not is_sqlite_integer(task_id):
+        return []
     rows = get_db().execute(_LIST_COMMENTS, (task_id,)).fetchall()
     return [Comment.from_row(row) for row in rows]
 
@@ -94,6 +96,8 @@ def add_comment(task_id: int, values: Mapping[str, Any]) -> Comment | None:
             instead of failing inside :meth:`app.models.Comment.from_row` with a
             value that is not a row at all.
     """
+    if not is_sqlite_integer(task_id):
+        return None
     db = get_db()
     if db.execute(_TASK_EXISTS, (task_id,)).fetchone() is None:
         return None

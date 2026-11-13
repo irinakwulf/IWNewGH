@@ -1,6 +1,6 @@
 # Test-time dependencies, pinned exactly. Installing this file installs both sets:
 # the runtime closure from requirements.txt and the seven test-time packages below.
-# Run the suite from the repository root with: python -m pytest
+# Run the suite from the repository root with: ./.venv/bin/python -m pytest
 -r requirements.txt
 
 # pytest: the runner - fixtures, parametrization, plain asserts; uses Flask's own test client, so no plugin.

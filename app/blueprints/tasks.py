@@ -318,6 +318,10 @@ def task_list():
     A filter value outside its control's allowed set is a malformed request rather
     than a field to correct, so it is answered with the 400 page naming the
     parameter instead of a list that silently ignores it.
+
+    Returns:
+        The rendered task list with the default 200 status, or the 400 page naming
+        every filter parameter the parser rejected.
     """
     filters, errors = parse_task_filters(request.args)
     if errors:
@@ -350,6 +354,12 @@ def task_create():
 
     The GET render defaults the Status select to Pending, which is the same status
     the parser and the schema apply when a submission names none.
+
+    Returns:
+        On ``GET``, the empty create form with the default 200 status. On a
+        rejected ``POST``, the same form at 200 with the submitted values and the
+        parser's messages, having written nothing. On an accepted ``POST``, a 302
+        to the new task's detail page.
     """
     # Tested for the write method rather than for GET, because Flask adds HEAD to
     # every GET rule: a HEAD probe must take this branch and receive the form's
@@ -374,6 +384,10 @@ def task_detail(task_id):
     unknown id into the 404 page; ``app.services.comments.list_comments`` supplies
     the conversation, oldest first, and ``app.services.members.list_members`` the
     options for the assign and comment-author selects.
+
+    Returns:
+        The rendered detail page with the default 200 status, or the 404 page when
+        no task has that id.
     """
     task = task_service.get_task(task_id)
     if task is None:
@@ -395,6 +409,12 @@ def task_edit(task_id):
     ``app.services.tasks.update_task`` is the one call that writes; a rejected
     submission re-renders the form at 200 with the submitted values, the parser's
     messages and the stored task still behind the heading, and writes nothing.
+
+    Returns:
+        On ``GET``, the edit form with the default 200 status. On a rejected
+        ``POST``, the same form at 200 with the submitted values and the parser's
+        messages, having written nothing. On an accepted ``POST``, a 302 to the
+        task's detail page. An unknown id is the 404 page on both methods.
     """
     task = task_service.get_task(task_id)
     if task is None:
@@ -424,6 +444,12 @@ def task_set_status(task_id):
     naming ``status``; and the filters a list-origin action carried are validated
     last but still before ``app.services.tasks.set_status`` writes, so a malformed
     request about where to return cannot leave a row changed.
+
+    Returns:
+        A 302 to the filtered list when the action carried ``origin=list``, and to
+        the task's detail page otherwise. An unknown id is the 404 page and a
+        rejected status or carried filter the 400 page, both raised before
+        ``app.services.tasks.set_status`` writes.
     """
     if task_service.get_task(task_id) is None:
         abort(404)
@@ -453,6 +479,12 @@ def task_set_assignee(task_id):
     the task form's Assignee field, the assignee filter and the comment author go
     through, so this control accepts exactly their spellings rather than whatever
     ``int()`` would coerce.
+
+    Returns:
+        A 302 to the filtered list when the action carried ``origin=list``, and to
+        the task's detail page otherwise. An unknown id is the 404 page and a
+        rejected assignee or carried filter the 400 page, both raised before
+        ``app.services.tasks.set_assignee`` writes.
     """
     if task_service.get_task(task_id) is None:
         abort(404)
@@ -481,6 +513,11 @@ def task_add_comment(task_id):
     ``app.services.comments.add_comment`` is the one call that writes; a rejected
     submission re-renders the detail page at 200 with the conversation, the typed
     body and the parser's messages in place, and writes nothing.
+
+    Returns:
+        On an accepted ``POST``, a 302 to the task's detail page. On a rejected
+        one, the same page at 200 with the typed body and the parser's messages,
+        having written nothing; an unknown id is the 404 page.
     """
     task = task_service.get_task(task_id)
     if task is None:

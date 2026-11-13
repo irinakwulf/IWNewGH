@@ -21,9 +21,10 @@
   The screen's single top-level heading belongs here rather than to
   app/templates/base.html, which supplies the shell, the navigation and the footer
   but no heading of its own, so every view and every error page owns one. The
-  navigation is also base.html's: on an error page no link can be current, because
-  a request that matched no route leaves request.endpoint None, and that is
-  correct.
+  navigation is also base.html's, and so is which of its links is marked current,
+  a decision that file states in full. What this page relies on is narrower: a
+  request that matched no route at all leaves `request.endpoint` None, and the
+  shell then marks nothing.
 
   The markup and its classes are the ones app/static/css/app.css defines and no
   others -- `.empty-state` for the heading-sentence-actions block, `.row` for the

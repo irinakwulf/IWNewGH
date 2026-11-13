@@ -31,13 +31,8 @@
 
   `metric` is the only class in the output: app/static/css/app.css styles the card and
   the <strong> and <span> inside it, so the number and the label need no class of their
-  own and none is invented here. The anchor is the leaf element and its accessible name
-  is the number followed by the label ("12 Total tasks"), which is the announcement a
-  reviewer checking the count against the filtered list expects. Nothing else belongs
-  inside it: no icon, no arrow, no hidden prefix.
-
-  Safe to import: the file emits no markup of its own and is not part of the template
-  inheritance tree, so it renders nothing until a caller invokes the macro.
+  own and none is invented here. The anchor is the leaf element, its accessible name the
+  number followed by the label ("12 Total tasks"), and nothing else belongs inside it.
 #}
 
 {%- macro metric_card(label, value, href) -%}

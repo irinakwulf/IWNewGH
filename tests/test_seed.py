@@ -7,8 +7,8 @@ command and the test fixtures share it.
 
 The one thing that is driven through the application is the pair of commands the
 application registers on it -- ``init-db`` and ``seed-db`` -- through Flask's own
-CLI runner, because those are the entry points the README and the plan tell a
-reviewer to run and a broken registration would otherwise leave the suite green.
+CLI runner, because those are the entry points ``README.md`` tells a reviewer to
+run and a broken registration would otherwise leave the suite green.
 
 Every expected value about the dataset is derived from :data:`seed.SAMPLE_DATA`
 -- the row counts, the summary line the loader prints, the members of each
@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import logging
 import sqlite3
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -59,6 +60,38 @@ INIT_DB_MESSAGE = "Initialized the database."
 MISSING_SEED_MESSAGE = (
     "seed.py was not found at the repository root; run this command from there."
 )
+
+# The record the seed command writes when it has loaded the dataset.
+SEED_EVENT_MESSAGE = (
+    "Seeded the sample dataset into the database named by the DATABASE setting"
+)
+
+# The two columns a project date is stored in, and the statement that rewrites
+# each one. The statements stay literal rather than being built from the column
+# name at call time, and the column key selects between them; CHECK (id = 1) makes
+# the one project row the only row either statement can address.
+DATE_COLUMNS: tuple[str, ...] = ("start_date", "end_date")
+SET_PROJECT_START_DATE = "UPDATE project SET start_date = ? WHERE id = 1"
+SET_PROJECT_END_DATE = "UPDATE project SET end_date = ? WHERE id = 1"
+DATE_UPDATE_STATEMENTS: dict[str, str] = {
+    "start_date": SET_PROJECT_START_DATE,
+    "end_date": SET_PROJECT_END_DATE,
+}
+
+# Every value the project-date test writes back, each derived from the date the
+# seeded row already holds so that no calendar date is written into this module.
+# Re-writing the stored value proves the constraint still accepts a real day; the
+# "shape_" changes break the ten-character YYYY-MM-DD form and the "calendar_"
+# changes keep that form while naming a day that does not exist, so each term of
+# the column's CHECK is proven by the class of value it is there to refuse.
+DATE_MUTATIONS: dict[str, tuple[Callable[[str], str], bool]] = {
+    "stored": (lambda stored: stored, True),
+    "shape_digit_removed": (lambda stored: stored[:-1], False),
+    "shape_hyphen_as_slash": (lambda stored: stored[:4] + "/" + stored[5:], False),
+    "calendar_month_13": (lambda stored: stored[:5] + "13" + stored[7:], False),
+    "calendar_day_32": (lambda stored: stored[:8] + "32", False),
+    "calendar_year_0000": (lambda stored: "0000" + stored[4:], False),
+}
 
 
 def sample_row_counts() -> dict[str, int]:
@@ -448,6 +481,41 @@ def test_the_schema_carries_the_member_length_bounds(
             file_connection.execute(statement, values)
 
 
+@pytest.mark.parametrize("column", DATE_COLUMNS)
+@pytest.mark.parametrize(
+    ("mutate", "accepted"), list(DATE_MUTATIONS.values()), ids=list(DATE_MUTATIONS)
+)
+def test_the_schema_carries_the_project_date_form(
+    file_connection: sqlite3.Connection,
+    column: str,
+    mutate: Callable[[str], str],
+    accepted: bool,
+) -> None:
+    """``project.start_date`` and ``project.end_date`` carry their ISO-8601 form.
+
+    The parser is not the only writer -- the seed loader, and any future command,
+    writes these columns directly -- so the column itself refuses text that is not
+    a real YYYY-MM-DD day. Without it a row could hold a start date
+    app/validation.py cannot parse, which it treats as no constraint at all, and
+    the rule that a deadline cannot precede the project start would stop applying.
+    """
+    stored = file_connection.execute(
+        "SELECT start_date, end_date FROM project WHERE id = 1"
+    ).fetchone()
+    value = mutate(stored[column])
+    statement = DATE_UPDATE_STATEMENTS[column]
+
+    if accepted:
+        file_connection.execute(statement, (value,))
+        rewritten = file_connection.execute(
+            "SELECT start_date, end_date FROM project WHERE id = 1"
+        ).fetchone()
+        assert rewritten[column] == value
+    else:
+        with pytest.raises(sqlite3.IntegrityError):
+            file_connection.execute(statement, (value,))
+
+
 # --------------------------------------------------------------------------
 # The two commands the application registers: the documented way in, driven
 # through Flask's own CLI runner rather than by calling the loader directly.
@@ -525,6 +593,29 @@ def test_seed_db_command_loads_the_sample_dataset(app) -> None:
             assert counted == (expected[table], expected[table]), (
                 f"{table} after seed-db"
             )
+
+
+def test_seed_db_command_logs_the_seed_event_without_the_database_path(
+    app, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The command logs the seed event it performed, and no path at this level.
+
+    The loader prints the documented summary line and stays free of the application
+    context, so the log record is the command's own account of the event. It names
+    the event rather than the file it wrote, which keeps the resolved database path
+    out of an installation's INFO log.
+    """
+    database = app.config["DATABASE"]
+    caplog.set_level(logging.INFO)
+
+    result = app.test_cli_runner().invoke(args=["seed-db"])
+
+    assert result.exit_code == 0, result.output
+    messages = [record.getMessage() for record in caplog.records]
+    assert SEED_EVENT_MESSAGE in messages
+    assert not any(database in message for message in messages), (
+        "no INFO record may name the resolved database path"
+    )
 
 
 def test_seed_db_command_is_idempotent(app) -> None:

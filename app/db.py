@@ -50,6 +50,7 @@ __all__ = [
     "get_db",
     "init_app",
     "init_db",
+    "is_sqlite_integer",
     "unusable_database_error",
 ]
 
@@ -69,6 +70,13 @@ SCHEMA_FILENAME = "schema.sql"
 # module constant so :func:`get_db` and :func:`close_db` cannot disagree on it.
 _DB_KEY = "db"
 
+# The bounds of the signed 64-bit INTEGER a SQLite column stores. A key outside
+# them names no row that could ever exist, and the check has to happen before the
+# value reaches a bind: sqlite3 raises OverflowError for such a value instead of
+# matching nothing, which would turn an unknown id into an exception.
+_SQLITE_INTEGER_MIN = -(2**63)
+_SQLITE_INTEGER_MAX = 2**63 - 1
+
 # Shown when the seed-db command cannot reach the sample dataset. It names the
 # fix rather than the failure, because the cause is always the same one.
 _MISSING_SEED_MESSAGE = (
@@ -84,6 +92,14 @@ _UNUSABLE_DATABASE_MESSAGE = (
     "it and re-run `flask --app app seed-db` to rebuild the schema and the "
     "sample data."
 )
+
+# The seed event's two log records, in the same shape as the factory's: the INFO one
+# names the event and the DEBUG one the file written, so neither record carries a
+# filesystem path.
+_SEED_MESSAGE = (
+    "Seeded the sample dataset into the database named by the DATABASE setting"
+)
+_SEED_PATH_MESSAGE = "Seeded the sample dataset into %s"
 
 
 def get_db() -> sqlite3.Connection:
@@ -116,6 +132,31 @@ def get_db() -> sqlite3.Connection:
         connection.execute("PRAGMA journal_mode = WAL")
         setattr(g, _DB_KEY, connection)
     return connection
+
+
+def is_sqlite_integer(value: int) -> bool:
+    """Return whether the value fits the INTEGER a SQLite column stores.
+
+    This is the single home of the rule every primary-key read and write depends
+    on: a SQLite ``INTEGER`` column holds a signed 64-bit value, so a Python
+    ``int`` outside that range names no row that could ever exist. The check has
+    to happen before the statement is prepared, because ``sqlite3`` raises
+    ``OverflowError`` for such a value at the bind rather than matching no row --
+    which would turn the ``None`` a service promises for an unknown id into an
+    exception the caller never sees coming. A function that binds a key therefore
+    answers an unrepresentable id exactly as it answers a missing one, and asks
+    this function whether the value may be bound at all.
+
+    Args:
+        value: The integer to test -- normally a primary key parsed from a request,
+            or one read back from a cursor.
+
+    Returns:
+        ``True`` when ``value`` lies within SQLite's signed 64-bit range and can be
+        bound to a statement, ``False`` when it cannot and therefore cannot name a
+        row.
+    """
+    return _SQLITE_INTEGER_MIN <= value <= _SQLITE_INTEGER_MAX
 
 
 def close_db(exception: BaseException | None = None) -> None:
@@ -216,7 +257,14 @@ def init_db_command() -> None:
 @click.command("seed-db")
 @with_appcontext
 def seed_db_command() -> None:
-    """Load the sample dataset into the database."""
+    """Load the sample dataset, logging the event and leaving the summary to the loader.
+
+    ``seed_database`` prints the one summary line the documented commands promise and
+    stays free of the application context, because the test fixtures call it outside
+    one; the command's own account of the event is therefore the log record, which
+    names the event rather than the resolved path so this record carries no filesystem
+    path. A caller that sets this logger to DEBUG gets the path in a second record.
+    """
     try:
         from seed import seed_database
     except ModuleNotFoundError as error:
@@ -228,6 +276,8 @@ def seed_db_command() -> None:
         raise click.ClickException(_MISSING_SEED_MESSAGE) from error
     # seed_database() rebuilds the schema and prints the seeded summary itself.
     seed_database(current_app.config["DATABASE"])
+    current_app.logger.info(_SEED_MESSAGE)
+    current_app.logger.debug(_SEED_PATH_MESSAGE, current_app.config["DATABASE"])
 
 
 def init_app(app: Flask) -> None:

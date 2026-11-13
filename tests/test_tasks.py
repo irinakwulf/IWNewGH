@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from html import unescape
 from urllib.parse import parse_qs, urlparse
@@ -44,7 +45,11 @@ import seed
 from app import templating
 from app.db import get_db
 from app.models import Member, STATUS_LABELS, TASK_STATUSES
+from app.services import tasks as task_service
 from app.services.members import list_members
+# The one statement of how the suite spells a month lives in ``tests/conftest.py``;
+# this module imports the names from there rather than restating the rule.
+from conftest import MONTH_ABBREVIATIONS
 
 # --------------------------------------------------------------------------
 # Constants. Anything that is a property of the dataset is derived by the helpers
@@ -76,14 +81,6 @@ SOON_WINDOW_DAYS = 6
 # a middle dot with one space on each side. Spelled as an escape here rather than
 # copied from the application so a separator that changes shows up as a failure.
 DEADLINE_SEPARATOR = "\u00b7"
-
-# Three-letter English month names. The interface ships English only, so a rendered
-# date must not follow the host's locale -- and neither must the expectation of it,
-# which is why this does not go through ``strftime("%b")``.
-MONTHS = (
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-)
 
 # The three status labels the interface displays, pinned as literals rather than read
 # from ``app.models.STATUS_LABELS``. That mapping is what the pages render from and
@@ -316,7 +313,7 @@ def offset_rendered(offset: int) -> str:
     alone, without asking ``app.templating`` to format it for the test asserting it.
     """
     day = date.today() + timedelta(days=offset)
-    return f"{day.day} {MONTHS[day.month - 1]} {day.year}"
+    return f"{day.day} {MONTH_ABBREVIATIONS[day.month - 1]} {day.year}"
 
 
 def relative_word(offset: int) -> str:
@@ -358,12 +355,15 @@ def rendered_date(iso_text: str) -> str:
 
     The page shows a date as ``26 Oct 2026`` -- an unpadded day, a three-letter month
     and a four-digit year -- which is what this reproduces from the stored text alone.
+    The month comes from ``MONTH_ABBREVIATIONS``, the English names
+    ``tests/conftest.py`` states once, never from ``strftime('%b')``, which would
+    follow the host's locale.
     The ``format_date`` filter the page calls is deliberately not used: a case that
     asked the application to format the value would confirm that filter against itself
     and prove nothing about what the page shows.
     """
     day = date.fromisoformat(iso_text)
-    return f"{day.day} {day.strftime('%b')} {day.year}"
+    return f"{day.day} {MONTH_ABBREVIATIONS[day.month - 1]} {day.year}"
 
 
 def valid_task_form(app: Flask) -> dict[str, str]:
@@ -608,6 +608,7 @@ def table_row(body: str, task_id: int) -> str:
 
     Args:
         body: The rendered task list.
+        task_id: The id of the task whose row to return.
 
     Returns:
         The ``<tr>`` segment for that task, as text.
@@ -1425,7 +1426,8 @@ def test_the_deadline_reference_day_is_read_once_per_request(app, monkeypatch) -
         second = templating.format_deadline(deadline_day.isoformat(), "pending")
 
     expected = (
-        f"{deadline_day.day} {MONTHS[deadline_day.month - 1]} {deadline_day.year}"
+        f"{deadline_day.day} {MONTH_ABBREVIATIONS[deadline_day.month - 1]}"
+        f" {deadline_day.year}"
         f" {DEADLINE_SEPARATOR} Due in 3 days"
     )
     assert first == second == expected
@@ -1561,6 +1563,54 @@ def test_the_largest_representable_id_still_reaches_the_lookup(
     response = seeded_client.get(f"/tasks/{SQLITE_INTEGER_MAX}")
 
     assert response.status_code == 404
+
+
+# The three mutations that bind the id they are handed, each with the arguments it
+# needs beyond that id. Every route reads the task before it writes, so no request
+# reaches one of these with an id the read did not already accept; calling them
+# directly is the only way to exercise the range guard each one holds.
+DIRECT_TASK_MUTATIONS = (
+    pytest.param(
+        lambda task_id: task_service.update_task(task_id, {"title": NEW_TASK_TITLE}),
+        id="update_task",
+    ),
+    pytest.param(
+        lambda task_id: task_service.set_status(task_id, "completed"),
+        id="set_status",
+    ),
+    pytest.param(
+        lambda task_id: task_service.set_assignee(task_id, None),
+        id="set_assignee",
+    ),
+)
+
+
+@pytest.mark.parametrize("mutate", DIRECT_TASK_MUTATIONS)
+def test_a_mutation_on_an_id_beyond_the_integer_range_writes_nothing(
+    app, db_path: str, mutate: Callable[[int], object]
+) -> None:
+    """A mutation handed an id SQLite cannot store answers ``None`` and writes nothing.
+
+    The route reads the task before it writes, so the guard inside each mutation is
+    unreachable over HTTP; a direct call is the only way to prove it is there. Without
+    it the id would reach the bind, sqlite3 would raise ``OverflowError`` and the
+    ``None`` that leads every caller to its 404 would surface as a server error. The
+    row counts are asserted with the result, because a guard that answered ``None``
+    after writing is the defect neither check reveals on its own.
+    """
+    seed.seed_database(db_path)
+    tasks_before = task_count(app)
+    comments_before = int(
+        query_one(app, "SELECT COUNT(*) AS total FROM comment")["total"]
+    )
+
+    with app.app_context():
+        assert mutate(SQLITE_INTEGER_OVERFLOW) is None
+
+    assert task_count(app) == tasks_before
+    assert int(
+        query_one(app, "SELECT COUNT(*) AS total FROM comment")["total"]
+    ) == comments_before
 
 
 def test_edit_form_is_prefilled_with_the_stored_values(seeded_client, app) -> None:

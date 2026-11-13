@@ -14,16 +14,10 @@ form or a 400 on a quick action, and this layer holds no HTTP concept.
 
 from __future__ import annotations
 
-from app.db import get_db
+from app.db import get_db, is_sqlite_integer
 from app.models import Member
 
 __all__ = ["get_member", "list_members"]
-
-# The range SQLite's signed 64-bit INTEGER column can hold. A key outside it names
-# a row that could never exist, and binding one raises ``OverflowError`` instead of
-# matching nothing, so the check has to happen before the statement is built.
-_SQLITE_INTEGER_MIN = -(2**63)
-_SQLITE_INTEGER_MAX = 2**63 - 1
 
 
 def list_members() -> list[Member]:
@@ -61,7 +55,7 @@ def get_member(member_id: int | None) -> Member | None:
     """
     if member_id is None:
         return None
-    if not _SQLITE_INTEGER_MIN <= member_id <= _SQLITE_INTEGER_MAX:
+    if not is_sqlite_integer(member_id):
         return None
     row = get_db().execute(
         "SELECT id, name, role, email, created_at FROM member WHERE id = ?",
