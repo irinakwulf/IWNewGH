@@ -75,8 +75,8 @@
 
   /* Typography. The size ramp has six steps; its ends are the xs and 2xl of the
      design, and sm, base, lg and xl are the conventional names of the steps between
-     them. --font-mono dresses the inline code in the empty states, which quote a
-     shell command. */
+     them. --font-mono dresses the inline code in the dashboard's task-area empty
+     state, which quotes the seed command. */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --text-xs: 0.75rem;
@@ -314,8 +314,8 @@ td {
   padding: var(--space-3);
 }
 
-/* Inline code appears in the dashboard and project empty states, which quote the
-   seed command. */
+/* Inline code appears in the dashboard's task-area empty state, which quotes the seed
+   command. */
 code {
   padding-inline: var(--space-1);
   background: var(--color-bg);
@@ -773,10 +773,10 @@ input[type="date"]:focus-within:not(:focus) {
   color: var(--color-success-text);
 }
 
-/* A deadline is always the absolute date; for unfinished work the template adds the
-   word the deadline_state filter returns. That filter already suppresses every
-   relative word on a completed task, so these rules never have to reason about
-   status. */
+/* A deadline is always the absolute date; for unfinished work the template renders the
+   format_deadline global, which supplies the word, while deadline_state supplies only
+   the modifier class below. The filter returns no state for a completed task, so these
+   rules never have to reason about status. */
 .deadline {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
