@@ -39,7 +39,7 @@ from html import unescape
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-from flask import Flask
+from flask import Flask, url_for
 
 import seed
 from app import templating
@@ -428,6 +428,39 @@ def task_form_url(app, screen: str) -> str:
     return f"/tasks/{task_id_for(app, task['title'])}/edit"
 
 
+def task_form_action(app, screen: str) -> str:
+    """Return the URL the task form on ``screen`` must post to.
+
+    ``_method="POST"`` asks the endpoint for the rule that accepts a write, which is
+    the rule whose handler stores the form, so the expected action is built by the
+    application's own URL builder rather than written down and a renamed route takes
+    the expectation with it. That builder needs a request context to produce a
+    relative path, which is why one is pushed for the call.
+
+    Args:
+        app: The application whose URL map is asked, and whose database holds the
+            task the edit form posts to.
+        screen: ``"create"`` for the empty form, ``"edit"`` for a stored task's.
+
+    Returns:
+        The path the rendered form's ``action`` must declare.
+
+    Raises:
+        ValueError: If ``screen`` is not one of the two ``TASK_FORM_SCREENS``.
+    """
+    if screen not in TASK_FORM_SCREENS:
+        raise ValueError(f"Unknown task form screen: {screen!r}")
+    task_id = (
+        task_id_for(app, seeded_task_in_status("pending")["title"])
+        if screen == "edit"
+        else None
+    )
+    with app.test_request_context():
+        if task_id is None:
+            return url_for("tasks.create", _method="POST")
+        return url_for("tasks.edit", task_id=task_id, _method="POST")
+
+
 # --------------------------------------------------------------------------
 # Reading the rendered page. These helpers exist so no case has to guess a field
 # name, assume an attribute order or compare a whole HTML block.
@@ -568,6 +601,50 @@ def form_markup(body: str, action_fragment: str) -> str:
         if action_fragment in attributes.get("action", ""):
             return block
     raise AssertionError(f"no form posting to {action_fragment!r} in the page")
+
+
+def opening_tag(body: str, marker: str) -> str:
+    """Return the opening tag of ``body`` that carries the literal ``marker``.
+
+    A form or a control is named by a slice of its own markup -- the action it posts
+    to, or its ``id`` -- rather than by the position it occupies, so a case reads as
+    the element it asserts on. The match stops at the tag's own ``>``, so one
+    element's attribute is never read off the next: the task form holds five labelled
+    fields and only the tag the marker names is returned.
+
+    Args:
+        body: The rendered page.
+        marker: The literal markup identifying the element, such as
+            ``'action="/tasks"'`` or ``'id="title"'``.
+
+    Returns:
+        The element's opening tag, which is what a boolean attribute has to be read
+        from: :func:`tag_attributes` maps only the attributes written with a value.
+
+    Raises:
+        AssertionError: If no opening tag carries the marker.
+    """
+    match = re.search(rf"<[^>]*{re.escape(marker)}[^>]*>", body)
+    assert match is not None, f"no opening tag carries {marker!r}"
+    return match.group(0)
+
+
+def declares_attribute(tag: str, name: str) -> bool:
+    """Return whether the opening tag ``tag`` declares the attribute ``name``.
+
+    A boolean attribute is written with no value at all, so it is absent from the
+    quoted-value mapping :func:`tag_attributes` returns and has to be read off the tag
+    itself. The name must stand as a whole word inside the tag, which is what tells a
+    control's ``required`` apart from any longer attribute containing those letters.
+
+    Args:
+        tag: An element's opening tag.
+        name: The attribute's name.
+
+    Returns:
+        Whether the tag declares it.
+    """
+    return re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", tag) is not None
 
 
 def hidden_inputs(body: str, action_fragment: str) -> dict:
@@ -830,6 +907,39 @@ def test_task_form_labels_every_control(
 
     assert label_text(body, control_id), f"{control_id} has an empty label"
     assert tag_attributes(body, tag, control_id).get("name") == control_id
+
+
+@pytest.mark.parametrize("screen", TASK_FORM_SCREENS)
+def test_the_task_form_posts_its_write_rule_and_marks_its_required_fields(
+    seeded_client, app, screen: str
+) -> None:
+    """Both form screens post the endpoint's write rule, not the path they were read on.
+
+    The action is built in the template and nowhere else, and every case that saves
+    posts to the contract path directly, so nothing else in this module would notice
+    an action that reverted to the form's own read path: from a browser the save
+    would answer 405 -- a post to a path only the read rule serves -- while the whole
+    suite stayed green. The expected action is the application's own build of the
+    endpoint's write rule, and the marker carries the attribute's closing quote, so
+    ``/tasks/new`` cannot satisfy the create form's ``/tasks``.
+
+    ``novalidate`` and the title's ``required`` are asserted as a pair, for the reason
+    the comment form's cases give: ``required`` tells a screen-reader user up front
+    what app.validation refuses, and only ``novalidate`` lets a submission that
+    bypasses it reach the parser's own sentence beside the field instead of the
+    browser's bubble.
+    """
+    action = task_form_action(app, screen)
+
+    response = seeded_client.get(task_form_url(app, screen))
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+
+    form = opening_tag(body, f'action="{action}"')
+    assert declares_attribute(form, "novalidate"), form
+
+    title = opening_tag(body, 'id="title"')
+    assert declares_attribute(title, "required"), title
 
 
 # The two screens that render the task form, by the read path each is served on.
