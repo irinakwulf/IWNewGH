@@ -90,20 +90,22 @@
         </td>
         <td>{{ task.comment_count }}</td>
         <td>
-          <form method="post" action="{{ url_for('tasks.set_status', task_id=task.id) }}">
-            <input type="hidden" name="origin" value="list">
-            <input type="hidden" name="filter_status" value="{{ applied.status if applied.status is not none else '' }}">
-            <input type="hidden" name="filter_assignee" value="{{ applied.assignee if applied.assignee is not none else '' }}">
-            <input type="hidden" name="filter_deadline" value="{{ applied.deadline if applied.deadline is not none else '' }}">
-            <label for="task-status-{{ task.id }}">Status</label>
-            <select class="select" id="task-status-{{ task.id }}" name="status" aria-label="Status for {{ task.title }}">
-              {% for option in TASK_STATUSES %}
-              <option value="{{ option }}"{% if task.status == option %} selected{% endif %}>{{ option|status_label }}</option>
-              {% endfor %}
-            </select>
-            <button type="submit" class="button button--secondary">Update</button>
-          </form>
-          <a href="{{ url_for('tasks.edit', task_id=task.id) }}">Edit</a>
+          <div class="stack">
+            <form class="stack" method="post" action="{{ url_for('tasks.set_status', task_id=task.id) }}">
+              <input type="hidden" name="origin" value="list">
+              <input type="hidden" name="filter_status" value="{{ applied.status if applied.status is not none else '' }}">
+              <input type="hidden" name="filter_assignee" value="{{ applied.assignee if applied.assignee is not none else '' }}">
+              <input type="hidden" name="filter_deadline" value="{{ applied.deadline if applied.deadline is not none else '' }}">
+              <label for="task-status-{{ task.id }}">Status</label>
+              <select class="select" id="task-status-{{ task.id }}" name="status" aria-label="Status for {{ task.title }}">
+                {% for option in TASK_STATUSES %}
+                <option value="{{ option }}"{% if task.status == option %} selected{% endif %}>{{ option|status_label }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit" class="button button--secondary">Update</button>
+            </form>
+            <a href="{{ url_for('tasks.edit', task_id=task.id) }}">Edit</a>
+          </div>
         </td>
       </tr>
       {% endfor %}

@@ -30,6 +30,8 @@
   /* Surfaces and separators. */
   --color-bg: #f6f7f9;
   --color-surface: #ffffff;
+  /* The pressed fill of a control that rests on a surface; body text clears 4.5:1 on it. */
+  --color-surface-active: #e5e9ef;
   --color-border: #cbd2da;
   --color-border-strong: #6b7280;
 
@@ -40,6 +42,8 @@
   /* Brand: primary buttons and links. */
   --color-primary: #1d4ed8;
   --color-primary-hover: #1743b3;
+  /* The pressed step of the brand ramp: darker than hover, still above 4.5:1 on white. */
+  --color-primary-active: #133a8f;
 
   /* Status pairs, one per value of the closed status set. Each text colour clears
      4.5:1 on its own background; the lowest of the three is the completed pair. */
@@ -103,6 +107,28 @@
   --border-width: 1px;
   --control-min: 12rem;
 
+  /* Structure: the fraction of its container a block fills, the shorthand that gives a
+     wrapped .row child a line of its own, the shorthand with which the filter panel
+     grows into the line it sits in, the metric grid's two track lists, the quick
+     actions' two, and how many spacing steps tall a textarea is at its shortest. A
+     repeat() count cannot read a token, so each track list -- the metric grid's and the
+     quick actions' -- is declared whole rather than assembled here. */
+  --size-full: 100%;
+  --flex-full-line: 1 1 var(--size-full);
+  --flex-inline-fill: 1 1 auto;
+  --grid-columns: repeat(4, minmax(0, 1fr));
+  --grid-columns-narrow: minmax(0, 1fr);
+  /* The quick actions' two track lists: the status and assignee fields side by side,
+     each action's button beneath its own field, above the breakpoint; one track that
+     every control fills below it. */
+  --quick-action-columns: repeat(2, max-content);
+  --quick-action-columns-narrow: minmax(0, 1fr);
+  --textarea-min-steps: 2;
+
+  /* The block size of a single-line control: the 44px touch-target floor, so that a
+     text field, a date field and a select of one class compute one height. */
+  --control-min-block: 2.75rem;
+
   /* The one dimension that cannot be a custom property: a media-query condition
      cannot read var(), so the breakpoint is written literally where it is used at
      the end of this file. */
@@ -139,8 +165,14 @@ h3 {
   line-height: var(--leading-tight);
 }
 
+/* The page heading is the task's own title on the detail view, and a title at its
+   200-character bound may hold no break opportunity at all. Such a run wraps here
+   instead of painting one line past the page; `anywhere` is the value that also
+   lowers the heading's min-content width, which `break-word` leaves at the width of
+   the unbroken run. */
 h1 {
   font-size: var(--text-2xl);
+  overflow-wrap: anywhere;
 }
 
 h2 {
@@ -182,9 +214,16 @@ dt:first-child {
   margin-block-start: 0;
 }
 
+/* A definition's value is read-only text a person typed -- a project name, a
+   description -- so it keeps the width of the column it sits in even when it holds
+   one unbroken run: `anywhere` gives it a break opportunity where the layout needs
+   one, and lowers what the value contributes to its container's min-content width,
+   which `break-word` does not. The deadline and the status badge keep their own
+   `white-space: nowrap`, so neither is split by this. */
 dd {
   margin-block: 0 var(--space-1);
   margin-inline-start: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Blocks that carry no margin of their own -- a row of buttons, a panel, a heading
@@ -202,6 +241,14 @@ time {
   font-size: var(--text-sm);
 }
 
+/* A comment body is the other place a person's text of unbounded length reaches the
+   page, so it takes the same break opportunity a task title and a project name take:
+   the comment list has no wrapper to scroll, and an unbroken run wraps inside the
+   column instead of painting past it. */
+li p {
+  overflow-wrap: anywhere;
+}
+
 a {
   color: var(--color-primary);
   text-decoration: underline;
@@ -211,11 +258,24 @@ a:hover {
   color: var(--color-primary-hover);
 }
 
+/* A press darkens one step past hover, so the click is acknowledged before the page
+   the link opens arrives. */
+a:active {
+  color: var(--color-primary-active);
+}
+
 label {
   display: block;
   margin-block-end: var(--space-1);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+}
+
+/* Where a label is a flex child of a .stack, the stack's row-gap would space it as far
+   from its own control as from the field above; cancelling that gap by one step leaves
+   the label's own --space-1, so a label always sits nearer its control than its neighbour. */
+.stack > label {
+  margin-block-end: calc(var(--space-1) - var(--space-4));
 }
 
 /* Controls take the page's font rather than the browser's, so a button and an input
@@ -276,6 +336,16 @@ textarea:focus-visible {
   outline-offset: var(--focus-ring-offset);
 }
 
+/* The one focus stop the rule above cannot reach: the native date field's calendar
+   button takes focus inside the field's own shadow root, so at that stop the field
+   matches :focus-within but neither :focus nor :focus-visible and would show no ring
+   at all. This draws the same ring for that state only -- while the field itself holds
+   the focus, the rule above already has it. */
+input[type="date"]:focus-within:not(:focus) {
+  outline: var(--focus-ring-width) solid var(--color-focus);
+  outline-offset: var(--focus-ring-offset);
+}
+
 /* ==========================================================================
    Layout primitives
    ========================================================================== */
@@ -324,6 +394,14 @@ textarea:focus-visible {
   text-underline-offset: var(--space-1);
 }
 
+/* A press marks the link as hover does. This follows the current screen's rule so that
+   the link you are already on, which that rule paints in --color-text, is acknowledged
+   on a press as well; its weight and underline are left to that rule. */
+.nav a:active {
+  color: var(--color-primary-active);
+  text-decoration: underline;
+}
+
 .footer {
   color: var(--color-text-muted);
   font-size: var(--text-sm);
@@ -350,7 +428,7 @@ textarea:focus-visible {
 .grid {
   display: grid;
   gap: var(--space-4);
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: var(--grid-columns);
 }
 
 /* The task detail view's two quick actions: the status and the assignee fields
@@ -360,7 +438,7 @@ textarea:focus-visible {
    status, Assign -- is both the reading order and the tab order. */
 .quick-actions {
   display: grid;
-  grid-template-columns: repeat(2, max-content);
+  grid-template-columns: var(--quick-action-columns);
   gap: var(--space-4) var(--space-3);
   align-items: start;
   justify-items: start;
@@ -408,12 +486,19 @@ textarea:focus-visible {
   box-shadow: var(--shadow-2);
 }
 
+/* A pressed card pushes the raised shadow back down rather than changing colour, so the
+   number keeps the type it carries at rest. */
+.metric:active {
+  border-color: var(--color-border-strong);
+  box-shadow: none;
+}
+
 /* The task list's filter panel. Its three labelled selects and its Apply and Clear
    controls wrap rather than overflow, and nothing submits itself: the button is the
    only control that applies a filter. */
 .filters {
   display: flex;
-  flex: 1 1 auto;
+  flex: var(--flex-inline-fill);
   flex-wrap: wrap;
   gap: var(--space-3);
   align-items: flex-end;
@@ -443,7 +528,7 @@ textarea:focus-visible {
    instead of pushing the page wide. */
 .table-wrap {
   overflow-x: auto;
-  max-inline-size: 100%;
+  max-inline-size: var(--size-full);
   background: var(--color-surface);
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-2);
@@ -451,7 +536,7 @@ textarea:focus-visible {
 }
 
 .table {
-  inline-size: 100%;
+  inline-size: var(--size-full);
 }
 
 /* Row separators use the hairline: they divide content rather than outline a
@@ -461,20 +546,46 @@ textarea:focus-visible {
   border-block-end: var(--border-width) solid var(--color-border);
 }
 
+/* Cells keep their text on word boundaries, so a member's name and a deadline's
+   wording are never split; the title is the one cell holding text of unbounded
+   length, and it is given its break opportunity below. */
 .table td {
   vertical-align: top;
   border-block-end: var(--border-width) solid var(--color-border);
+}
+
+/* A title at its 200-character bound may hold no break opportunity at all, so the
+   cell it sits in takes one: `anywhere` rather than `break-word` because it also
+   lowers the cell's min-content width, and under the table's automatic layout that
+   width is what one unbroken run otherwise sets for the column, widening the table
+   until the other columns start past the wrapper's edge. The floor keeps the column
+   at the smallest measure a control already takes, so a title wraps at a readable
+   width instead of collapsing to a column of single characters once the table is
+   under pressure on a narrow screen. */
+.table td:first-child {
+  min-inline-size: var(--control-min);
+  overflow-wrap: anywhere;
 }
 
 .table tbody tr:last-child td {
   border-block-end: none;
 }
 
-/* A row's status select sits inside a cell, where the shared 100% inline size would
+/* A row's status select sits inside a cell, where the class's full inline size would
    stretch that cell until the title column had nothing left; it keeps its own
    content width here. */
 .table .select {
   inline-size: auto;
+}
+
+/* The row's status form and its Edit link are a .stack inside a cell, and a stack
+   stretches each child to its own width. A control and a link keep their own width
+   here, exactly as the row rendered before it was stacked: the Update button and the
+   Edit link size to their text, and the select above keeps the content width the rule
+   above gives it. The stack's column and its gaps are unchanged, so a label stays its
+   own step from its control and each control its own step from the next. */
+.table td .stack {
+  align-items: flex-start;
 }
 
 
@@ -509,6 +620,14 @@ textarea:focus-visible {
   color: var(--color-surface);
 }
 
+/* A pressed primary button takes the darkest step of the ramp, one past hover, so the
+   click is acknowledged before the page it submits to arrives. */
+.button--primary:active {
+  background: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+  color: var(--color-surface);
+}
+
 /* Secondary actions keep --color-border-strong as their boundary, never the hairline:
    a button's edge is a control boundary and has to clear 3:1. */
 .button--secondary {
@@ -522,13 +641,33 @@ textarea:focus-visible {
   color: var(--color-text);
 }
 
+/* A pressed secondary button fills one step past hover and keeps the strong boundary:
+   a control edge is never the hairline. */
+.button--secondary:active {
+  background: var(--color-surface-active);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+/* A disabled button keeps the muted fill and text the form controls take when they are
+   disabled and drops the pointer cursor; its edge stays --color-border-strong, since a
+   disabled control is still a control boundary and the hairline is never one. Declared
+   after every variant and state so it wins on a control that is both disabled and
+   hovered. */
+.button:disabled {
+  background: var(--color-bg);
+  border-color: var(--color-border-strong);
+  color: var(--color-text-muted);
+  cursor: default;
+}
+
 /* Text fields, selects and textareas. Selects keep their native arrow: the
    affordance is the platform's, and removing it would hide that the control opens a
    list. */
 .input,
 .select,
 .textarea {
-  inline-size: 100%;
+  inline-size: var(--size-full);
   padding: var(--space-2) var(--space-3);
   background: var(--color-surface);
   border: var(--border-width) solid var(--color-border-strong);
@@ -537,10 +676,23 @@ textarea:focus-visible {
   font-size: var(--text-base);
 }
 
+/* One height for the class's single-line controls. A browser draws a date field's
+   editing box a little taller than a text field's line box and a select shorter than
+   either, so without a declared minimum the four fields of one form would not line up
+   as one family; the minimum is the floor every one of them reaches. */
+.input,
+.select {
+  min-block-size: var(--control-min-block);
+}
+
 /* A textarea's height comes from its rows attribute; this only keeps a very short
-   one usable. */
+   one usable, over the single-line minimum above. It is a block of its own so that it
+   sits in its field exactly as the other controls do: left inline, its baseline would
+   leave extra space beneath it and every field after it would be spaced differently
+   from the same field on another form. */
 .textarea {
-  min-block-size: calc(var(--space-7) * 2);
+  display: block;
+  min-block-size: calc(var(--space-7) * var(--textarea-min-steps));
 }
 
 /* A hint sentence under a field -- the deadline's entry format on the task form, the
@@ -673,7 +825,11 @@ textarea:focus-visible {
 
 /* A panel that stands in place of content rather than inside it: the dashboard's two
    empty areas, the task list's two, the comment list's, and the body of the three
-   error pages. */
+   error pages. It deliberately sizes no heading: a heading inside a panel keeps the
+   step of its own level rather than taking one of the panel's, so the page title stays
+   the page title and a panel heading still sits below the section heading above it,
+   while an .empty-state heading rule would outrank both the base ramp and the
+   breakpoint's own h1 step. */
 .empty-state {
   padding: var(--space-6);
   background: var(--color-surface);
@@ -681,12 +837,6 @@ textarea:focus-visible {
   border-radius: var(--radius-2);
   box-shadow: var(--shadow-1);
   text-align: center;
-}
-
-.empty-state h1,
-.empty-state h2,
-.empty-state h3 {
-  font-size: var(--text-lg);
 }
 
 .empty-state p {
@@ -719,24 +869,29 @@ textarea:focus-visible {
   }
 
   .grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: var(--grid-columns-narrow);
   }
 
   .quick-actions {
-    grid-template-columns: 1fr;
+    grid-template-columns: var(--quick-action-columns-narrow);
     justify-items: stretch;
   }
 
-  .row > * {
-    flex-basis: 100%;
+  /* A wrapped row gives a block its own line, but a control keeps its own width and
+     the navigation keeps its place against the far edge: a button that filled the
+     line would be a different component from the same button above the breakpoint,
+     and a nav stretched to the line would lose the alignment it holds at every wider
+     width. */
+  .row > *:not(.button):not(.nav) {
+    flex-basis: var(--size-full);
   }
 
   .filters {
-    flex-basis: 100%;
+    flex-basis: var(--size-full);
   }
 
   .filters > div {
-    flex: 1 1 100%;
+    flex: var(--flex-full-line);
     min-inline-size: 0;
   }
 }
