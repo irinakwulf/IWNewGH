@@ -28,6 +28,8 @@
   the other. Exactly one create control renders at a time -- the task area's own
   button when tasks exist, or the empty state's button when none do, never both.
 
+  No empty state prints a path; every link is built by url_for, so routes can move.
+
   The dashboard's single primary action is that create control, so "Edit project
   details" is always a secondary button in both project states. The headings form a
   complete outline: the page's only level-one heading is here (base.html
@@ -93,7 +95,7 @@
     {% else %}
     <div class="empty-state">
       <h3>No project details yet.</h3>
-      <p>The project name, description, start date and end date can be recorded at <code>/project</code>.</p>
+      <p>The project name, description, start date and end date can be recorded with the button below.</p>
       <a class="button button--secondary" href="{{ url_for('project.view') }}">Edit project details</a>
     </div>
     {% endif %}

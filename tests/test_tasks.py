@@ -1756,6 +1756,40 @@ def test_list_origin_status_update_rejects_a_carried_filter_out_of_set(
     assert task_row(app, task_id)["status"] == filtered_status
 
 
+def test_status_action_does_not_read_its_own_query_string_as_a_filter(
+    seeded_client, app
+) -> None:
+    """The carried filters are the row form's hidden inputs, and nothing else.
+
+    A row's status form is built with no query string on its action, so a ``status``
+    there can only be the new value the action is asked for -- the same name one of
+    the three filters uses. Reading it as a filter instead would send the reviewer
+    back to ``/tasks?status=<the new status>`` rather than the list they acted on, so
+    this posts both: the body's ``filter_status`` is the filter the redirect must
+    carry, and the action's own value must never appear in it.
+    """
+    filtered_status = "pending"
+    action_status = "completed"
+    task = seeded_task_in_status(filtered_status)
+    task_id = task_id_for(app, task["title"])
+
+    listing = seeded_client.get("/tasks", query_string={"status": filtered_status})
+    assert listing.status_code == 200
+    carried = hidden_inputs(listing.get_data(as_text=True), f"/tasks/{task_id}/status")
+    assert carried["filter_status"] == filtered_status
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/status",
+        query_string={"status": action_status},
+        data={**carried, "status": action_status},
+    )
+
+    assert response.status_code == 302
+    assert location_path(response) == "/tasks"
+    assert location_query(response).get("status") == [filtered_status]
+    assert task_row(app, task_id)["status"] == action_status
+
+
 # --------------------------------------------------------------------------
 # Assigning a task to a team member, and clearing the assignment.
 # --------------------------------------------------------------------------
@@ -1921,9 +1955,9 @@ def test_list_origin_assign_rejects_a_carried_assignee_out_of_range(
 ) -> None:
     """An assignee filter the action carries back is re-validated before the write.
 
-    The carried value cannot name a member, so the request is answered with the same
-    400 the task list gives it, naming the filter parameter, and the task's stored
-    assignee is untouched.
+    The carried value is the form field a row posts its filters in, and it cannot
+    name a member, so the request is answered with the same 400 the task list gives
+    it, naming the filter parameter, and the task's stored assignee is untouched.
     """
     task = seeded_unassigned_task()
     task_id = task_id_for(app, task["title"])
@@ -1931,8 +1965,11 @@ def test_list_origin_assign_rejects_a_carried_assignee_out_of_range(
 
     response = seeded_client.post(
         f"/tasks/{task_id}/assign",
-        query_string={"assignee": carried},
-        data={"assignee_id": str(member.id), "origin": "list"},
+        data={
+            "assignee_id": str(member.id),
+            "origin": "list",
+            "filter_assignee": carried,
+        },
     )
 
     assert response.status_code == 400
@@ -2032,3 +2069,41 @@ def test_assigning_from_a_filtered_list_keeps_the_filters(seeded_client, app) ->
     # The filter survived, and the task it just assigned no longer matches it.
     assert "No tasks match these filters." in body
 
+
+# A plain field name carrying a value outside that filter's allowed set: the shape a
+# body takes when a filter is posted under the parameter's own name rather than as the
+# row form's ``filter_*`` input. No control in this application renders either one, so
+# neither may be read as a filter -- reading it would answer this action with a 400
+# before the write and leave the assignment unrecorded.
+PLAIN_FILTER_FIELDS = (
+    pytest.param("deadline", UNKNOWN_DEADLINE_FILTER, id="plain-deadline"),
+    pytest.param("status", "done", id="plain-status"),
+)
+
+
+@pytest.mark.parametrize(("field", "value"), PLAIN_FILTER_FIELDS)
+def test_assign_from_the_list_does_not_read_a_plain_filter_name(
+    seeded_client, app, field: str, value: str
+) -> None:
+    """A body field named like a filter but not prefixed is not a filter.
+
+    The row form posts ``filter_assignee`` and its two neighbours; a bare ``deadline``
+    or ``status`` in the same body belongs to no control the list renders, and the
+    status action's own value is the one posted under exactly the bare name. So the
+    plain name is ignored: the action redirects to the unfiltered list and the
+    assignment is stored, where reading this value -- outside its set -- would have
+    answered 400 and written nothing.
+    """
+    task = seeded_unassigned_task()
+    task_id = task_id_for(app, task["title"])
+    member = member_for_email(app, seed.SAMPLE_DATA["members"][1]["email"])
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/assign",
+        data={"assignee_id": str(member.id), "origin": "list", field: value},
+    )
+
+    assert response.status_code == 302
+    assert location_path(response) == "/tasks"
+    assert location_query(response) == {}
+    assert int(task_row(app, task_id)["assignee_id"]) == member.id

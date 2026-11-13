@@ -43,15 +43,16 @@ an id that does not exist is a 404 whatever the payload.
 posted from the task list and returns the reviewer to that same filtered list, so
 the three filter values travel with the request as the hidden ``filter_status``,
 ``filter_assignee`` and ``filter_deadline`` inputs the row template renders -- that
-is the shape the interface actually posts. One of those filters is itself named
-``status``, which the status action also uses for its own new value, so the two are
-kept in separate mappings rather than renamed: the action's value is read from the
-body and the filters from the ``filter_*`` names, and a form action carrying them in
-its query string instead is the accepted alternative. The carried filters are
-re-validated with the same parser the list itself uses, before the write, so a
-malformed request cannot change a row; the redirect is then rebuilt with ``url_for``
-from those validated values. No target is taken from the request, which is why the
-module has no ``next`` parameter and no open-redirect surface at all.
+is the shape the interface actually posts, and it is the one shape read back. One
+of those filters is itself named ``status``, which the status action also uses for
+its own new value, so the two never share a source: the action's value is read from
+the plain body field and the filters only ever from the prefixed ``filter_*`` names,
+which is why a ``status`` posted for the action cannot come back as a status filter
+however the action's own URL is written. The carried filters are re-validated with
+the same parser the list itself uses, before the write, so a malformed request
+cannot change a row; the redirect is then rebuilt with ``url_for`` from those
+validated values. No target is taken from the request, which is why the module has
+no ``next`` parameter and no open-redirect surface at all.
 """
 
 from __future__ import annotations
@@ -145,21 +146,17 @@ def _origin() -> str:
     return request.form.get("origin") or request.args.get("origin") or ""
 
 
-def _carried_filters(*, exclude: tuple[str, ...] = ()) -> dict[str, object]:
+def _carried_filters() -> dict[str, object]:
     """Re-validate the task-list filters a list-origin quick action carried.
 
-    The filters arrive as the row template's hidden ``filter_*`` inputs, and the
-    query string wins when it holds any of them: on the status action one filter
-    and the action's own value are both called ``status``, and only the body
-    belongs to the action. A form that carries the filters in its action's query
-    string instead is served by that first branch, and the body fallback reads the
-    ``filter_*`` names first and the plain name second, skipping whatever
-    ``exclude`` names.
-
-    Args:
-        exclude: Filter names not to read from the form body. The status action
-            excludes ``status``, whose body value is the new status rather than a
-            filter.
+    The filters arrive as the row template's hidden ``filter_*`` inputs and from
+    nowhere else: the form body is the only source, and only the prefixed name is
+    read. One of those filters is itself called ``status``, and the status action
+    uses that name for its own new value, so a body without the prefix holds the
+    action's value rather than a filter -- which is why the plain name is never
+    read, and why the action's value can never become a filter whatever else the
+    request carries. The action's own URL is not consulted either, for the same
+    reason: a query string is the list's own filter source, not this action's.
 
     Returns:
         The parser's ``values`` mapping: every filter key present, each one either a
@@ -170,20 +167,11 @@ def _carried_filters(*, exclude: tuple[str, ...] = ()) -> dict[str, object]:
             value is not in its control's allowed set. That is the same 400 the list
             answers for the same value, and it happens before any write.
     """
-    if any(key in request.args for key in _FILTER_KEYS):
-        source: Mapping[str, str] = request.args
-    else:
-        # An explicit filter_* name always counts, because it can only be a filter.
-        # The plain name is the fallback a form gets when it posts the filter under
-        # the parameter's own name, and that is what ``exclude`` suppresses: on the
-        # status action the body's ``status`` is the new status, not a filter.
-        source = {}
-        for key in _FILTER_KEYS:
-            explicit = request.form.get(f"filter_{key}")
-            if explicit is not None:
-                source[key] = explicit
-            elif key not in exclude:
-                source[key] = request.form.get(key, "")
+    source = {
+        key: request.form[f"filter_{key}"]
+        for key in _FILTER_KEYS
+        if f"filter_{key}" in request.form
+    }
 
     filters, errors = parse_task_filters(source)
     if errors:
@@ -445,9 +433,7 @@ def task_set_status(task_id):
         abort(400, description=_MSG_INVALID_STATUS)
 
     origin = _origin()
-    filters = (
-        _carried_filters(exclude=(_STATUS_FIELD,)) if origin == _ORIGIN_LIST else {}
-    )
+    filters = _carried_filters() if origin == _ORIGIN_LIST else {}
 
     task_service.set_status(task_id, status)
     flash(f"Status updated to {STATUS_LABELS[status]}.", "success")

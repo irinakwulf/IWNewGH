@@ -48,7 +48,9 @@
 {% block content %}
   <h1>Tasks</h1>
 
-  {% set filters_applied = filters.status or filters.assignee or filters.deadline %}
+  {# Mirrors the two partials: an absent mapping counts as no filter applied, so
+     the plain count line renders instead of raising on the attribute access. #}
+  {% set filters_applied = filters and (filters.status or filters.assignee or filters.deadline) %}
   {% set total = total_count|default(tasks|length) %}
 
   <div class="row">

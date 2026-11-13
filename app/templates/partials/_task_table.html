@@ -35,9 +35,9 @@
 
   Each row's status form carries the three list filters as `filter_status`,
   `filter_assignee` and `filter_deadline`, each of them the empty string only when
-  parse_task_filters returned None for it. That is the form-fallback shape
-  app/blueprints/tasks.py::_carried_filters reads, so changing a row's status from a
-  filtered list returns the reviewer to that same filtered list. `origin=list` is
+  parse_task_filters returned None for it. Those three prefixed names are the only
+  shape app/blueprints/tasks.py::_carried_filters reads, so changing a row's status
+  from a filtered list returns the reviewer to that same filtered list. `origin=list` is
   that navigation hint; the new status itself posts as `status`, and no URL is ever
   posted in a field. The select keeps its visible "Status" label and names the task
   it changes in aria-label, because a page of rows would otherwise present one
