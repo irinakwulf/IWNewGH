@@ -352,6 +352,10 @@ def seed_database(db_path: str | Path) -> None:
         # simply not be checked.
         connection.execute("PRAGMA foreign_keys = ON")
 
+        # Rows come back addressable by column name, which is how the ids this
+        # function reads back are picked out below.
+        connection.row_factory = sqlite3.Row
+
         # Dropped child first so the statements hold with foreign keys enforced.
         # The schema file drops the tables too; these stay so idempotency does not
         # depend on another file's contents.
@@ -373,49 +377,71 @@ def seed_database(db_path: str | Path) -> None:
             ),
         )
 
-        member_ids: dict[str, int] = {}
-        for member in members:
-            cursor = connection.execute(
-                "INSERT INTO member (name, role, email) VALUES (?, ?, ?)",
-                (member["name"], member["role"], member["email"]),
-            )
-            member_ids[member["email"]] = int(cursor.lastrowid)
+        connection.executemany(
+            "INSERT INTO member (name, role, email) VALUES (?, ?, ?)",
+            [
+                (member["name"], member["role"], member["email"])
+                for member in members
+            ],
+        )
+        # Read the ids back in one query rather than capturing one per insert, and
+        # key them on ``email``: it is the one column the schema declares UNIQUE,
+        # so it names a member unambiguously while a name would not.
+        member_ids = {
+            str(row["email"]): int(row["id"])
+            for row in connection.execute("SELECT id, email FROM member")
+        }
 
-        task_ids: dict[str, int] = {}
-        for task in tasks:
-            assignee = task["assignee"]
-            cursor = connection.execute(
-                "INSERT INTO task"
-                " (project_id, title, description, assignee_id, status, deadline)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+        connection.executemany(
+            "INSERT INTO task"
+            " (project_id, title, description, assignee_id, status, deadline)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [
                 (
                     PROJECT_ID,
                     task["title"],
                     task["description"],
-                    _member_id(member_ids, assignee) if assignee else None,
+                    (
+                        _member_id(member_ids, task["assignee"])
+                        if task["assignee"]
+                        else None
+                    ),
                     task["status"],
                     _iso_offset(today, task["deadline_offset"]),
-                ),
-            )
-            task_ids[task["title"]] = int(cursor.lastrowid)
-
-        comment_count = 0
-        for task in tasks:
-            task_id = task_ids[task["title"]]
-            for comment in task["comments"]:
-                connection.execute(
-                    "INSERT INTO comment (task_id, author_id, body, created_at)"
-                    " VALUES (?, ?, ?, ?)",
-                    (
-                        task_id,
-                        _member_id(member_ids, comment["author"]),
-                        comment["body"],
-                        _timestamp(
-                            today, comment["age_days"], comment["time_of_day"]
-                        ),
-                    ),
                 )
-                comment_count += 1
+                for task in tasks
+            ],
+        )
+        # Read back rather than captured per insert: this function has just
+        # recreated the table, so SQLite assigns the ids from one in insertion
+        # order and a task's position in ``SAMPLE_DATA["tasks"]`` is the key.
+        # ``task.title`` is not UNIQUE, so it would collapse two tasks that share
+        # a title onto the later one and attach the earlier one's comments wrongly.
+        task_ids = [
+            int(row["id"])
+            for row in connection.execute("SELECT id FROM task ORDER BY id")
+        ]
+        if len(task_ids) != len(tasks):
+            raise RuntimeError(
+                f"expected {len(tasks)} task rows, read back {len(task_ids)}"
+            )
+
+        comment_rows = [
+            (
+                task_ids[position],
+                _member_id(member_ids, comment["author"]),
+                comment["body"],
+                _timestamp(today, comment["age_days"], comment["time_of_day"]),
+            )
+            for position, task in enumerate(tasks)
+            for comment in task["comments"]
+        ]
+        connection.executemany(
+            "INSERT INTO comment (task_id, author_id, body, created_at)"
+            " VALUES (?, ?, ?, ?)",
+            comment_rows,
+        )
+        comment_count = len(comment_rows)
 
     print(
         f"Seeded {PROJECT_ID} project, {len(members)} members, "

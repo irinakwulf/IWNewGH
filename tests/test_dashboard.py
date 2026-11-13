@@ -29,8 +29,9 @@ check rather than a reading of the template.
 
 The module talks only to Flask's test client, through the ``seeded_client``,
 ``client`` and ``app`` fixtures of ``tests/conftest.py``. It imports no Flask module
-and opens no application context; the one read of the database it needs, the id of a
-seeded task, is a parameterized query over the ``db_path`` fixture.
+and opens no application context; the reads of the database it needs -- the id of a
+seeded task and the project row's two stored dates -- are queries over the
+``db_path`` fixture.
 """
 
 from __future__ import annotations
@@ -281,16 +282,46 @@ def expected_counts() -> dict[str, int]:
     return counts
 
 
-def formatted_date(offset: int) -> str:
-    """Return the day ``offset`` days from today as the dashboard renders it.
+def stored_project_dates(db_path: str) -> tuple[str, str]:
+    """Return the project's stored start and end dates as ``YYYY-MM-DD`` text.
 
-    The seed writes day offsets rather than calendar dates, and the project panel
-    renders each stored date through the ``format_date`` filter, so the expectation
-    is the same offset resolved against today and formatted the same way: no
-    zero-padding on the day, and the English month name spelled out in
-    :data:`MONTHS` rather than the one ``strftime`` would take from the locale.
+    The seed writes day offsets resolved against the single day it ran on, so the
+    two dates the project panel renders are the ones stored; reading them back
+    puts the expectation on that same day however long after seeding the
+    assertion runs.
+
+    Args:
+        db_path: The database this test's application is using.
+
+    Returns:
+        The stored ``start_date`` and ``end_date``, in that order.
+
+    Raises:
+        AssertionError: If the database holds no project row to read.
     """
-    day = date.today() + timedelta(days=offset)
+    with contextlib.closing(sqlite3.connect(db_path)) as connection:
+        row = connection.execute(
+            "SELECT start_date, end_date FROM project"
+        ).fetchone()
+    assert row is not None, "the seeded database holds no project row"
+    return str(row[0]), str(row[1])
+
+
+def formatted_date(iso_date: str) -> str:
+    """Return a stored ``YYYY-MM-DD`` date as the dashboard's project panel shows it.
+
+    The panel renders each stored date through the ``format_date`` filter, so the
+    expectation formats the same stored value the same way: no zero-padding on the
+    day, and the English month name taken from :data:`MONTHS` rather than from
+    ``strftime``, which follows the process locale.
+
+    Args:
+        iso_date: A date as the seed stored it, ``YYYY-MM-DD``.
+
+    Returns:
+        The date as the project panel renders it.
+    """
+    day = date.fromisoformat(iso_date)
     return f"{day.day} {MONTHS[day.month - 1]} {day.year}"
 
 
@@ -400,14 +431,15 @@ def test_seeded_dashboard_offers_the_create_control(seeded_client):
     assert EMPTY_TASK_AREA_ACTION not in body
 
 
-def test_seeded_dashboard_shows_the_project_details(seeded_client):
+def test_seeded_dashboard_shows_the_project_details(seeded_client, db_path):
     """The project panel shows the stored name, description and both dates."""
     body, _ = read_dashboard(seeded_client)
     project = seed.SAMPLE_DATA["project"]
+    start_date, end_date = stored_project_dates(db_path)
     assert html.escape(project["name"], quote=False) in body
     assert html.escape(project["description"], quote=False) in body
-    assert formatted_date(project["start_offset"]) in body
-    assert formatted_date(project["end_offset"]) in body
+    assert formatted_date(start_date) in body
+    assert formatted_date(end_date) in body
     assert EMPTY_PROJECT_HEADING not in body
 
 

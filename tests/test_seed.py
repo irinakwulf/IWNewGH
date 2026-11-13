@@ -139,6 +139,33 @@ def _expected_bucket_titles(bucket: str) -> list[str]:
     return sorted(titles)
 
 
+def seed_day(connection: sqlite3.Connection) -> date:
+    """Return the day :func:`seed.seed_database` resolved its offsets against.
+
+    The loader resolves every ``SAMPLE_DATA`` offset against the single
+    ``date.today()`` it reads when it runs, and writes the project's dates as that
+    day plus the project's own offsets. Recovering the day from the stored row --
+    its start date minus ``start_offset`` -- therefore takes no clock reading of
+    its own, which is what lets a run whose seeding and assertions straddle
+    midnight still compare the rows and the expectations of one and the same day.
+
+    Args:
+        connection: A named-row connection to a freshly seeded database.
+
+    Returns:
+        The date the loader measured the dataset's day offsets from.
+
+    Raises:
+        AssertionError: If the database holds no project row, which would leave
+            the offsets unresolvable.
+    """
+    row = connection.execute("SELECT start_date FROM project").fetchone()
+    assert row is not None, "the seeded database holds no project row"
+    return date.fromisoformat(row["start_date"]) - timedelta(
+        days=seed.SAMPLE_DATA["project"]["start_offset"]
+    )
+
+
 def _bucket_query(bucket: str, today: date) -> tuple[str, tuple[str, ...]]:
     """Return the SQL, and its parameters, selecting ``bucket`` from a seeded file.
 
@@ -290,7 +317,7 @@ def test_overdue_bucket_excludes_completed_work(
         and task["deadline_offset"] < 0
         and task["status"] == "completed"
     )
-    sql, parameters = _bucket_query("overdue", date.today())
+    sql, parameters = _bucket_query("overdue", seed_day(file_connection))
     overdue = sorted(
         row["title"] for row in file_connection.execute(sql, parameters)
     )
@@ -307,7 +334,7 @@ def test_deadline_bucket_matches_the_sample_data(
 ) -> None:
     """Each deadline query returns exactly the tasks the dataset puts in its bucket."""
     expected = _expected_bucket_titles(bucket)
-    sql, parameters = _bucket_query(bucket, date.today())
+    sql, parameters = _bucket_query(bucket, seed_day(file_connection))
     stored = sorted(
         row["title"] for row in file_connection.execute(sql, parameters)
     )
@@ -366,6 +393,59 @@ def test_seeded_comments_match_the_sample_data(
         for row in file_connection.execute("SELECT created_at FROM comment")
     ]
     assert len(set(timestamps)) == expected_comments
+
+
+def test_each_comment_is_attached_to_the_task_that_declares_it(
+    file_connection: sqlite3.Connection,
+) -> None:
+    """Every comment's parent is the task whose own ``comments`` list holds it.
+
+    The total count above cannot see a comment written against the wrong task, and
+    ``task.title`` is not a column the schema declares UNIQUE, so attribution is
+    asserted per task here: two tasks sharing a title must still each keep their
+    own conversation.
+    """
+    declared = {
+        task["title"]: sorted(comment["body"] for comment in task["comments"])
+        for task in seed.SAMPLE_DATA["tasks"]
+        if task["comments"]
+    }
+    stored: dict[str, list[str]] = {}
+    for row in file_connection.execute(
+        "SELECT task.title AS title, comment.body AS body FROM comment"
+        " JOIN task ON task.id = comment.task_id"
+    ):
+        stored.setdefault(row["title"], []).append(row["body"])
+
+    assert declared, "SAMPLE_DATA holds no task with a comment"
+    assert {title: sorted(bodies) for title, bodies in stored.items()} == declared
+
+
+@pytest.mark.parametrize(("length", "accepted"), [(80, True), (81, False), (0, False)])
+@pytest.mark.parametrize("column", ("name", "role"))
+def test_the_schema_carries_the_member_length_bounds(
+    file_connection: sqlite3.Connection, column: str, length: int, accepted: bool
+) -> None:
+    """``member.name`` and ``member.role`` carry their 1-80 bound in the schema.
+
+    Those two are the only length-bounded fields no form posts, so the schema is the
+    one layer that can hold the rule: exactly 80 characters is accepted at the
+    boundary, and one character more -- or none at all -- is refused by the column
+    itself rather than by a caller that happens not to be listening.
+    """
+    values = {
+        "name": "Amina Haddad",
+        "role": "Product Owner",
+        "email": "extra.member@example.com",
+    }
+    values[column] = "x" * length
+
+    statement = "INSERT INTO member (name, role, email) VALUES (:name, :role, :email)"
+    if accepted:
+        file_connection.execute(statement, values)
+    else:
+        with pytest.raises(sqlite3.IntegrityError):
+            file_connection.execute(statement, values)
 
 
 # --------------------------------------------------------------------------

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from html import unescape
 from urllib.parse import parse_qs, urlparse
 
@@ -41,6 +41,7 @@ import pytest
 from flask import Flask
 
 import seed
+from app import templating
 from app.db import get_db
 from app.models import Member, STATUS_LABELS, TASK_STATUSES
 from app.services.members import list_members
@@ -71,6 +72,19 @@ DESCRIPTION_LIMIT = 2000
 # test instead of being followed silently.
 SOON_WINDOW_DAYS = 6
 
+# The glyph the deadline indicator puts between a date and its relative word: U+00B7,
+# a middle dot with one space on each side. Spelled as an escape here rather than
+# copied from the application so a separator that changes shows up as a failure.
+DEADLINE_SEPARATOR = "\u00b7"
+
+# Three-letter English month names. The interface ships English only, so a rendered
+# date must not follow the host's locale -- and neither must the expectation of it,
+# which is why this does not go through ``strftime("%b")``.
+MONTHS = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
 # The three status labels the interface displays, pinned as literals rather than read
 # from ``app.models.STATUS_LABELS``. That mapping is what the pages render from and
 # what the rest of this module's status assertions compare against, so a typo in it
@@ -85,6 +99,15 @@ STATUS_LABEL_TEXT = {
 # An id no task and no member holds. The routes parse ids as integers, so the value
 # only has to be one nothing was inserted with.
 UNKNOWN_ID = 9999
+
+# Member ids no row could hold: one past the range SQLite's signed 64-bit key stores,
+# and one long enough that converting it to an integer would raise rather than yield
+# an id to look up. Neither may reach the database as a bind, and neither may leave a
+# row changed.
+OVER_RANGE_ASSIGNEE_IDS = (
+    pytest.param("9" * 21, id="past-the-signed-64-bit-range"),
+    pytest.param("9" * 4301, id="past-the-integer-digit-limit"),
+)
 
 # The largest id a SQLite INTEGER column can store, and the first one it cannot.
 # Werkzeug's ``<int:>`` converter accepts any run of digits, so a route can be handed
@@ -104,6 +127,11 @@ _FORM = re.compile(r"<form\b[^>]*>.*?</form>", re.DOTALL | re.IGNORECASE)
 _INPUT = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
 _OPTION = re.compile(r"<option\b([^>]*)>(.*?)</option>", re.DOTALL | re.IGNORECASE)
 _SELECTED = re.compile(r"(?:^|\s)selected(?:\s|$)")
+
+# The deadline indicator's span, with whatever state class modifiers it carries. One
+# pattern serves both the row helper and the detail page, so neither reads its text by
+# guessing at the surrounding markup.
+_DEADLINE_SPAN = re.compile(r'<span class="deadline[^"]*">(.*?)</span>', re.DOTALL)
 
 
 # --------------------------------------------------------------------------
@@ -276,6 +304,41 @@ def seeded_completed_task_with_a_past_deadline() -> dict:
 def iso_offset(offset: int) -> str:
     """Return ``offset`` days from today as the ``YYYY-MM-DD`` text the app stores."""
     return (date.today() + timedelta(days=offset)).isoformat()
+
+
+def offset_rendered(offset: int) -> str:
+    """Return the day ``offset`` days from today as the interface renders a date.
+
+    The interface shows a date as ``26 Oct 2026`` -- an unpadded day, a three-letter
+    English month and a four-digit year -- which is what this reproduces from the day
+    alone, without asking ``app.templating`` to format it for the test asserting it.
+    """
+    day = date.today() + timedelta(days=offset)
+    return f"{day.day} {MONTHS[day.month - 1]} {day.year}"
+
+
+def relative_word(offset: int) -> str:
+    """Return the relative word a deadline ``offset`` days from today renders.
+
+    The three wordings are the interface's own: past work reads ``Overdue``, today's
+    reads ``Due today``, and a deadline inside the coming week states how far away it
+    is as ``Due in N days``, with the plural standing at one day. The word is derived
+    from the offset rather than written down, so a dataset change moves it.
+    """
+    if offset < 0:
+        return "Overdue"
+    if offset == 0:
+        return "Due today"
+    return f"Due in {offset} days"
+
+
+def deadline_indicator(offset: int) -> str:
+    """Return the whole indicator an unfinished deadline ``offset`` days out renders.
+
+    The date, the separator and the word are one string, which is what makes the list
+    and the detail page comparable character for character.
+    """
+    return f"{offset_rendered(offset)} {DEADLINE_SEPARATOR} {relative_word(offset)}"
 
 
 def project_start_iso() -> str:
@@ -467,6 +530,29 @@ def table_row(body: str, task_id: int) -> str:
         if marker in segment:
             return segment
     raise AssertionError(f"the task list holds no row linking to /tasks/{task_id}")
+
+
+def deadline_span_text(markup: str, *, description: str) -> str:
+    """Return the deadline indicator's text inside ``markup``, unescaped.
+
+    The indicator is the markup's only ``.deadline`` span, and it carries the state
+    class modifier as well as the words, so reading its text is what lets the list and
+    the detail page be compared character for character.
+
+    Args:
+        markup: Rendered markup to read -- one task's list row, or a task's Deadline
+            definition value from the detail page.
+        description: Where the markup came from, for the failure message.
+
+    Returns:
+        The span's text, with surrounding whitespace removed.
+
+    Raises:
+        AssertionError: If the markup renders no deadline indicator at all.
+    """
+    match = _DEADLINE_SPAN.search(markup)
+    assert match is not None, f"{description} renders no deadline indicator"
+    return unescape(match.group(1)).strip()
 
 
 def definition_value(body: str, term: str) -> str:
@@ -672,6 +758,29 @@ def test_rejected_create_rerenders_with_its_message(
     assert textarea_value(body, "description") == data["description"]
 
 
+@pytest.mark.parametrize("assignee_id", OVER_RANGE_ASSIGNEE_IDS)
+def test_create_rejects_an_assignee_id_no_member_row_could_hold(
+    seeded_client, app, assignee_id: str
+) -> None:
+    """An assignee id past the key column is a field message, and nothing is written.
+
+    The create form is a data-entry control, so a value naming no member is reported
+    beside the field with the form still filled in -- the same outcome a shorter
+    unknown id gets, however long the submitted run is.
+    """
+    before = task_count(app)
+
+    response = seeded_client.post(
+        "/tasks", data={**valid_task_form(app), "assignee_id": assignee_id}
+    )
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert "Select a team member from the list." in body
+    assert task_count(app) == before
+    assert textarea_value(body, "description") == NEW_TASK_DESCRIPTION
+
+
 def test_create_rejects_a_deadline_before_the_project_start(seeded_client, app) -> None:
     """A deadline may not precede the project's start date."""
     before = task_count(app)
@@ -729,6 +838,36 @@ def test_a_task_title_is_escaped_when_rendered(seeded_client, app) -> None:
     body = seeded_client.get(response.headers["Location"]).get_data(as_text=True)
     assert title not in body
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+
+def test_a_posted_nul_in_the_title_is_not_stored(seeded_client, app) -> None:
+    """A NUL in a posted title is dropped, so the stored title is the accepted one.
+
+    The body is posted as raw bytes, because a NUL cannot survive the form encoding
+    the client builds from a mapping. SQLite ends a text value at a NUL for its own
+    text functions, so a title kept with one inside would be stored as text no read
+    can return in full; the write reports success, so the row must hold the value
+    the page then shows.
+    """
+    accepted_title = "QA nulbyte title"
+    before = task_count(app)
+
+    response = seeded_client.post(
+        "/tasks",
+        data=b"title=QA nul\x00byte title&description=",
+        content_type="application/x-www-form-urlencoded",
+    )
+
+    created_id = task_id_for(app, accepted_title)
+    assert_redirects_to(response, f"/tasks/{created_id}")
+    assert task_count(app) == before + 1
+
+    row = task_row(app, created_id)
+    assert row["title"] == accepted_title
+    stored_length = query_one(
+        app, "SELECT length(title) AS chars FROM task WHERE id = ?", (created_id,)
+    )
+    assert int(stored_length["chars"]) == len(accepted_title)
 
 
 # --------------------------------------------------------------------------
@@ -792,21 +931,22 @@ def test_task_without_a_deadline_says_so_on_both_views(seeded_client, app) -> No
     detail = seeded_client.get(f"/tasks/{task_id}").get_data(as_text=True)
     listing = seeded_client.get("/tasks").get_data(as_text=True)
 
-    assert definition_value(detail, "Deadline") == "No deadline"
+    assert definition_value(detail, "Deadline") == (
+        '<span class="deadline">No deadline</span>'
+    )
     assert "No deadline" in table_row(listing, task_id)
 
 
-@pytest.mark.parametrize(
-    ("state", "word"),
-    (("overdue", "Overdue"), ("today", "Due today"), ("soon", "Due soon")),
-)
+@pytest.mark.parametrize("state", ("overdue", "today", "soon"))
 def test_deadline_indicator_states_its_state_in_words(
-    seeded_client, app, state: str, word: str
+    seeded_client, app, state: str
 ) -> None:
     """The deadline carries both the state's class and the word that says it.
 
     The word matters as much as the colour: a deadline conveyed by colour alone is
-    unreadable to part of the audience.
+    unreadable to part of the audience. The expected word is the one the seeded task's
+    own offset produces, so the "soon" case states the day count the dataset implies
+    rather than a number written down here.
     """
     task = seeded_task_with_deadline_state(state)
     task_id = task_id_for(app, task["title"])
@@ -814,7 +954,111 @@ def test_deadline_indicator_states_its_state_in_words(
     body = seeded_client.get(f"/tasks/{task_id}").get_data(as_text=True)
 
     assert f"deadline--{state}" in body
-    assert word in body
+    assert relative_word(task["deadline_offset"]) in body
+
+
+@pytest.mark.parametrize("days_ahead", range(1, SOON_WINDOW_DAYS + 1))
+def test_deadline_indicator_counts_the_days_inside_the_soon_window(
+    days_ahead: int,
+) -> None:
+    """Imminent work states how many days away it is, not just that it is imminent.
+
+    The window runs from tomorrow to the sixth day ahead, and every day inside it needs
+    its own count: "Due in N days" is what tells a reviewer whether to act now or at
+    the end of the week. The wording keeps the plural at one day, so the first day of
+    the window reads "Due in 1 days".
+    """
+    rendered = templating.format_deadline(iso_offset(days_ahead), "pending")
+
+    assert rendered == deadline_indicator(days_ahead)
+    assert rendered.endswith(f"Due in {days_ahead} days")
+
+
+@pytest.mark.parametrize("state", ("overdue", "today", "soon"))
+def test_one_deadline_reads_the_same_on_the_list_and_the_detail_page(
+    seeded_client, app, state: str
+) -> None:
+    """A deadline is one component, so both screens word and punctuate it alike.
+
+    The list and the detail page describe the same task for the same reviewer, so a
+    date, a separator glyph or a word that differs between them is the drift that makes
+    neither screen trustworthy. Both texts are compared with the derived indicator, and
+    with each other, which pins the glyph as well as the words.
+    """
+    task = seeded_task_with_deadline_state(state)
+    task_id = task_id_for(app, task["title"])
+
+    listing = seeded_client.get("/tasks").get_data(as_text=True)
+    detail = seeded_client.get(f"/tasks/{task_id}").get_data(as_text=True)
+
+    expected = deadline_indicator(task["deadline_offset"])
+    listed = deadline_span_text(
+        table_row(listing, task_id), description=f"the row for /tasks/{task_id}"
+    )
+    shown = deadline_span_text(
+        definition_value(detail, "Deadline"), description="the detail Deadline value"
+    )
+
+    assert listed == expected
+    assert shown == expected
+    assert listed == shown
+    assert "\u2014" not in listed
+
+
+@pytest.mark.parametrize("deadline", (None, "", "not-a-date"))
+def test_deadline_indicator_says_nothing_without_a_usable_date(
+    deadline: str | None,
+) -> None:
+    """A missing or unreadable deadline renders no indicator text at all.
+
+    Both views state that case in their own words ("No deadline") rather than through
+    the indicator, so the formatter returning an empty string is what keeps a blank
+    date from being rendered as if it were a deadline.
+    """
+    assert templating.format_deadline(deadline) == ""
+
+
+def test_the_deadline_reference_day_is_read_once_per_request(app, monkeypatch) -> None:
+    """Every deadline on one page is measured against one day.
+
+    The interface states that ``today`` is evaluated once per request, so the state and
+    the day count of a rendered indicator always describe the same day: a page rendered
+    across midnight cannot label two rows of one list against different days. The
+    patched clock steps forward on every read, so a second read inside the same request
+    would show up as a different day count in the rendered text.
+    """
+    days = [date(2026, 11, 13), date(2026, 11, 14), date(2026, 11, 15)]
+    reads: list[int] = []
+
+    class SteppingDate(date):
+        """A ``date`` whose ``today`` hands out the next day on every read."""
+
+        @classmethod
+        def today(cls) -> date:
+            reads.append(len(reads))
+            return cls.fromordinal(days[min(len(reads) - 1, len(days) - 1)].toordinal())
+
+    class Clock:
+        """The parts of the ``datetime`` module the deadline formatters read."""
+
+        date = SteppingDate
+        datetime = datetime
+        timedelta = timedelta
+
+    monkeypatch.setattr(templating, "datetime", Clock)
+
+    deadline_day = days[0] + timedelta(days=3)
+
+    with app.test_request_context("/tasks"):
+        first = templating.format_deadline(deadline_day.isoformat(), "pending")
+        second = templating.format_deadline(deadline_day.isoformat(), "pending")
+
+    expected = (
+        f"{deadline_day.day} {MONTHS[deadline_day.month - 1]} {deadline_day.year}"
+        f" {DEADLINE_SEPARATOR} Due in 3 days"
+    )
+    assert first == second == expected
+    assert len(reads) == 1
 
 
 def test_a_completed_task_never_reads_as_overdue(seeded_client, app) -> None:
@@ -1260,6 +1504,60 @@ def test_assigning_an_unknown_member_is_a_400(seeded_client, app) -> None:
     assert "assignee_id" in body
     assert "Select a team member from the list." in body
     assert task_row(app, task_id)["assignee_id"] == before
+
+
+@pytest.mark.parametrize("assignee_id", OVER_RANGE_ASSIGNEE_IDS)
+def test_assigning_an_out_of_range_member_is_a_400(
+    seeded_client, app, assignee_id: str
+) -> None:
+    """An assignee id no member row could hold gets the quick action's 400.
+
+    The value cannot name a member, so the closed-set control answers it with the 400
+    page naming the parameter rather than a server error, and the stored assignee is
+    left as it was.
+    """
+    task = seeded_assigned_task()
+    task_id = task_id_for(app, task["title"])
+    before = task_row(app, task_id)["assignee_id"]
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/assign",
+        data={"assignee_id": assignee_id, "origin": "detail"},
+    )
+
+    assert response.status_code == 400
+    body = response.get_data(as_text=True)
+    assert "assignee_id" in body
+    assert "Select a team member from the list." in body
+    assert task_row(app, task_id)["assignee_id"] == before
+
+
+@pytest.mark.parametrize("carried", OVER_RANGE_ASSIGNEE_IDS)
+def test_list_origin_assign_rejects_a_carried_assignee_out_of_range(
+    seeded_client, app, carried: str
+) -> None:
+    """An assignee filter the action carries back is re-validated before the write.
+
+    The carried value cannot name a member, so the request is answered with the same
+    400 the task list gives it, naming the filter parameter, and the task's stored
+    assignee is untouched.
+    """
+    task = seeded_unassigned_task()
+    task_id = task_id_for(app, task["title"])
+    member = member_for_email(app, seed.SAMPLE_DATA["members"][1]["email"])
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/assign",
+        query_string={"assignee": carried},
+        data={"assignee_id": str(member.id), "origin": "list"},
+    )
+
+    assert response.status_code == 400
+    # The page's description is autoescaped, so the quoted parameter reads through an
+    # escaping pass rather than as typed.
+    body = unescape(response.get_data(as_text=True))
+    assert "assignee: Invalid value for filter 'assignee'." in body
+    assert task_row(app, task_id)["assignee_id"] is None
 
 
 def test_assigning_from_a_filtered_list_keeps_the_filters(seeded_client, app) -> None:

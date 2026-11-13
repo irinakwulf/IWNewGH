@@ -16,8 +16,9 @@
                  arrives here is valid.
     total_count  the unfiltered row count, from app.services.metrics -- which is
                  why the result line can say "2 of 12 tasks" without a second
-                 query, and why the count of matches is tasks|length and never
-                 total_count.
+                 query, why the count of matches is tasks|length and never
+                 total_count, and why the partial can tell an empty board from a
+                 filtered list that matched nothing.
 
   This file is the screen, not the table. partials/_filter_bar.html owns the GET
   form and its Apply and Clear controls; partials/_task_table.html owns the rows,
@@ -28,9 +29,10 @@
 
   Two rules that are easy to undo by accident:
 
-  * The toolbar's Create task link renders only while tasks exist. When none do,
-    the table partial's "No tasks yet." state supplies the one create control, so
-    a screen never shows two.
+  * The toolbar's Create task link renders only while the board holds a task. When
+    it holds none, the table partial's "No tasks yet." state supplies the one
+    create control -- whatever filter the query string carries -- so a screen never
+    shows two and never shows none.
   * That link is secondary on purpose: the view's primary action is "Apply
     filters", inside the filter bar.
 
@@ -58,8 +60,11 @@
 
   {# One line, with no whitespace between the tags and the words: a reviewer
      compares this sentence against the rows below it, and the seeded list has to
-     read exactly "12 tasks", "2 of 12 tasks match these filters" and "1 task". #}
-  <p>{% if filters_applied %}{{ tasks|length }} of {{ total }} tasks match these filters{% elif total == 1 %}1 task{% else %}{{ total }} tasks{% endif %}</p>
+     read exactly "12 tasks", "2 of 12 tasks match these filters" and "1 task".
+     The noun counts the board and the verb counts the matches, so one match reads
+     "1 of 12 tasks matches these filters" rather than the plural, and a board with
+     no task at all says "0 tasks" instead of a fraction of nothing. #}
+  <p>{% if filters_applied and total %}{{ tasks|length }} of {{ total }} task{{ '' if total == 1 else 's' }} match{{ 'es' if tasks|length == 1 else '' }} these filters{% elif total == 1 %}1 task{% else %}{{ total }} tasks{% endif %}</p>
 
   {% include "partials/_task_table.html" %}
 {% endblock %}

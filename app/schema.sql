@@ -30,10 +30,15 @@ CREATE TABLE project (
 -- Team members: the people a task is assigned to and a comment is attributed
 -- to. email is UNIQUE because the sample data names an assignee or an author
 -- by that column, so it is the one column that identifies a member uniquely.
+-- name and role are bounded to 1-80 characters here, not in app/validation.py:
+-- they are the only length-bounded fields no form posts, since members arrive
+-- only from the sample data. That module holds the bounds a form posts because
+-- it also holds the message the reviewer sees; with no member form there is
+-- nothing there to own the rule, so the schema is where it lives.
 CREATE TABLE member (
     id         INTEGER PRIMARY KEY,
-    name       TEXT NOT NULL,
-    role       TEXT NOT NULL,
+    name       TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 80),
+    role       TEXT NOT NULL CHECK (length(role) BETWEEN 1 AND 80),
     email      TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

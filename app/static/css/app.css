@@ -331,7 +331,7 @@ textarea:focus-visible {
 }
 
 /* Horizontal arrangement: the header's name and navigation, the task list's toolbar,
-   the task detail view's status and assign forms, and every line of actions. */
+   and every line of actions. */
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -351,6 +351,23 @@ textarea:focus-visible {
   display: grid;
   gap: var(--space-4);
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* The task detail view's two quick actions: the status and the assignee fields
+   share a row and each action's button sits beneath the field it submits. The two
+   forms themselves generate no box (display: contents) and their controls name them
+   with form="...", so the document order -- status select, assignee select, Update
+   status, Assign -- is both the reading order and the tab order. */
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  gap: var(--space-4) var(--space-3);
+  align-items: start;
+  justify-items: start;
+}
+
+.quick-actions > form {
+  display: contents;
 }
 
 /* ==========================================================================
@@ -703,6 +720,11 @@ textarea:focus-visible {
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  .quick-actions {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
   }
 
   .row > * {

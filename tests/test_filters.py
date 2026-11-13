@@ -7,12 +7,14 @@ mistakes a filter bar makes easy to ship: silently dropping a value it does not
 recognise, and reporting finished work as late.
 
 Nothing about the sample data is written down here. Every expected row set is derived
-from :data:`seed.SAMPLE_DATA` -- the statuses from :data:`app.models.TASK_STATUSES`,
-the assignees from the members' own ``email`` values, the deadline buckets from each
-task's ``deadline_offset`` measured against ``date.today()`` -- and each member's id
-is read from the seeded database through :func:`app.services.members.list_members`,
-the same function the application uses. A failure here therefore means the filter and
-the dataset disagree, never that a number in this file went stale.
+from :data:`seed.SAMPLE_DATA` or from the rows the seed wrote -- the statuses from
+:data:`app.models.TASK_STATUSES`, the assignees from the members' own ``email``
+values, the deadline buckets from the deadlines the seed stored, compared against the
+same single reading of ``date.today()`` the request itself evaluates them with -- and
+each member's id is read from the seeded database through
+:func:`app.services.members.list_members`, the same function the application uses. A
+failure here therefore means the filter and the dataset disagree, never that a number
+in this file went stale.
 
 Row exactness is asserted from the markup the list is built from: every rendered row
 links its title to ``/tasks/<id>``, and nothing else on the page produces that shape,
@@ -40,6 +42,7 @@ sites guard every input they receive.
 from __future__ import annotations
 
 import re
+import sqlite3
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta
 from html import unescape
@@ -50,7 +53,7 @@ from flask.testing import FlaskClient
 from werkzeug.exceptions import BadRequest
 
 import seed
-from app import models, templating, validation
+from app import db, models, templating, validation
 from app.services import members
 from app.services import tasks as task_service
 
@@ -160,32 +163,79 @@ def titles_by_assignee(email: str | None) -> set[str]:
     return {task["title"] for task in sample_tasks() if task["assignee"] == email}
 
 
-def _deadline_of(task: dict, today: date) -> date | None:
-    """Return a seeded task's deadline as a date, resolved against ``today``.
+def stored_tasks(app: Flask) -> list[sqlite3.Row]:
+    """Return the seeded task rows the deadline expectations are measured from.
 
-    The dataset stores signed day offsets rather than calendar dates, and the loader
-    resolves them against a single ``date.today()`` when it runs. Resolving them here
-    against the same clock is what keeps the derived buckets comparable with the ones
-    the request computes.
+    The rows are read straight out of the seeded database inside an application
+    context, so the expectation depends on no filter logic of its own: the
+    deadlines the tasks actually carry are what it compares, exactly as the
+    application's own query will.
+
+    Args:
+        app: The application whose database the ``seeded_client`` fixture seeded.
+
+    Returns:
+        One row per seeded task, carrying ``title``, ``status``, ``deadline`` and
+        ``assignee_id``, in the order the loader inserted them.
     """
-    offset = task["deadline_offset"]
-    if offset is None:
-        return None
-    return today + timedelta(days=offset)
+    with app.app_context():
+        return db.get_db().execute(
+            "SELECT title, status, deadline, assignee_id FROM task ORDER BY id"
+        ).fetchall()
 
 
-def titles_in_deadline_bucket(bucket: str) -> set[str]:
-    """Return the titles the seeded tasks put in deadline ``bucket``.
+def _in_deadline_bucket(row: sqlite3.Row, bucket: str, today: date) -> bool:
+    """Return whether a stored task row falls in deadline ``bucket`` on ``today``.
 
-    The rules are the ones the product states, applied here to the dataset rather than
-    to SQL: ``overdue`` is a deadline before today on work that is not completed,
-    ``today`` is a deadline of today, ``week`` is today through today + 6 inclusive,
-    and ``none`` is no deadline at all. A task due today therefore falls in both
-    ``today`` and ``week``, because the control offers alternative buckets rather than
-    additive categories.
+    The rules are the product's own, restated over a stored row: ``overdue`` is a
+    deadline before today on work that is not completed, ``today`` is a deadline of
+    today, ``week`` is today through today + 6 inclusive, and ``none`` is no
+    deadline at all. A task due today therefore falls in both ``today`` and
+    ``week``, because the control offers alternative buckets rather than additive
+    categories.
+
+    Args:
+        row: One task row, as :func:`stored_tasks` returns them.
+        bucket: One of :data:`DEADLINE_BUCKETS`.
+        today: The single day the whole evaluation is measured from.
+
+    Returns:
+        ``True`` when that bucket selects the row.
+
+    Raises:
+        ValueError: If ``bucket`` is not one of :data:`DEADLINE_BUCKETS`, so a case
+            table that grew a bucket the product does not have fails loudly.
+    """
+    stored = row["deadline"]
+    deadline = date.fromisoformat(stored) if stored is not None else None
+    if bucket == "overdue":
+        return (
+            deadline is not None and deadline < today and row["status"] != "completed"
+        )
+    if bucket == "today":
+        return deadline == today
+    if bucket == "week":
+        return (
+            deadline is not None
+            and today <= deadline <= today + timedelta(days=THIS_WEEK_END_OFFSET)
+        )
+    if bucket == "none":
+        return deadline is None
+    raise ValueError(f"Unknown deadline bucket: {bucket!r}")
+
+
+def titles_in_deadline_bucket(bucket: str, app: Flask) -> set[str]:
+    """Return the titles the application puts in deadline ``bucket``.
+
+    The application evaluates every stored deadline against ``date.today()`` while
+    it serves the request, so the expectation reads that day once and applies the
+    product's rule to those same stored deadlines. Deriving the buckets from the
+    day the seed ran instead would fail after midnight, because the request itself
+    evaluates the new day.
 
     Args:
         bucket: One of :data:`DEADLINE_BUCKETS`.
+        app: The application whose database the ``seeded_client`` fixture seeded.
 
     Returns:
         The titles that bucket selects.
@@ -195,28 +245,11 @@ def titles_in_deadline_bucket(bucket: str) -> set[str]:
             table that grew a bucket the product does not have fails loudly.
     """
     today = date.today()
-    week_end = today + timedelta(days=THIS_WEEK_END_OFFSET)
-
-    titles: set[str] = set()
-    for task in sample_tasks():
-        deadline = _deadline_of(task, today)
-        if bucket == "overdue":
-            matches = (
-                deadline is not None
-                and deadline < today
-                and task["status"] != "completed"
-            )
-        elif bucket == "today":
-            matches = deadline == today
-        elif bucket == "week":
-            matches = deadline is not None and today <= deadline <= week_end
-        elif bucket == "none":
-            matches = deadline is None
-        else:
-            raise ValueError(f"Unknown deadline bucket: {bucket!r}")
-        if matches:
-            titles.add(task["title"])
-    return titles
+    return {
+        row["title"]
+        for row in stored_tasks(app)
+        if _in_deadline_bucket(row, bucket, today)
+    }
 
 
 def titles_completed_and_past_due() -> set[str]:
@@ -224,24 +257,69 @@ def titles_completed_and_past_due() -> set[str]:
 
     These are the rows the ``overdue`` bucket must not return: finished work is not
     late. They exist in the dataset precisely so the exclusion is tested against real
-    rows instead of being asserted about an empty set.
+    rows instead of being asserted about an empty set. The offsets are the dataset's
+    own, and a negative one stays in the past however long afterwards it is read, so
+    this needs no calendar date of its own.
     """
-    today = date.today()
+    return {
+        task["title"]
+        for task in sample_tasks()
+        if task["status"] == "completed"
+        and task["deadline_offset"] is not None
+        and task["deadline_offset"] < 0
+    }
+
+
+def dataset_titles_in_deadline_bucket(bucket: str) -> set[str]:
+    """Return the titles ``SAMPLE_DATA`` declares for deadline ``bucket``.
+
+    The coverage guards assert what the dataset itself holds, so this reads the
+    declared offsets in pure offset space rather than any stored deadline: negative
+    is the past, zero is the day the loader runs, and the week window is zero
+    through the sixth day ahead. No calendar date is involved, so the guards built
+    on it hold however late they run.
+
+    Args:
+        bucket: One of :data:`DEADLINE_BUCKETS`.
+
+    Returns:
+        The titles whose declared offset the bucket covers.
+
+    Raises:
+        ValueError: If ``bucket`` is not one of :data:`DEADLINE_BUCKETS`.
+    """
     titles: set[str] = set()
     for task in sample_tasks():
-        deadline = _deadline_of(task, today)
-        if task["status"] == "completed" and deadline is not None and deadline < today:
+        offset = task["deadline_offset"]
+        is_past = offset is not None and offset < 0
+        if bucket == "overdue":
+            matches = is_past and task["status"] != "completed"
+        elif bucket == "today":
+            matches = offset == 0
+        elif bucket == "week":
+            matches = offset is not None and 0 <= offset <= THIS_WEEK_END_OFFSET
+        elif bucket == "none":
+            matches = offset is None
+        else:
+            raise ValueError(f"Unknown deadline bucket: {bucket!r}")
+        if matches:
             titles.add(task["title"])
     return titles
 
 
-def probe_task_and_bucket() -> tuple[dict, str]:
-    """Return a seeded task that falls in a deadline bucket, and that bucket.
+def probe_task_and_bucket(app: Flask) -> tuple[sqlite3.Row, str]:
+    """Return a seeded task row that falls in a deadline bucket, and that bucket.
 
     The filters are exercised together on one task, so the task has to be one a
     deadline bucket actually holds: a completed task whose deadline has passed belongs
     to none of them -- ``overdue`` excludes finished work and it is neither due today,
-    inside the coming week nor undated -- so it could not make a combination case.
+    inside the coming week nor undated -- so it could not make a combination case. The
+    row and the rule that selects it are the seeded rows and the product's own rule,
+    measured from one reading of today, so the probe is a row the application's own
+    filter agrees is in the bucket it names.
+
+    Args:
+        app: The application whose database the ``seeded_client`` fixture seeded.
 
     Returns:
         The first such task in dataset order and the first bucket holding it, in the
@@ -251,10 +329,11 @@ def probe_task_and_bucket() -> tuple[dict, str]:
         AssertionError: If no seeded task falls in a bucket, which would leave the
             combination cases with nothing to prove.
     """
-    for task in sample_tasks():
+    today = date.today()
+    for row in stored_tasks(app):
         for bucket in DEADLINE_BUCKETS:
-            if task["title"] in titles_in_deadline_bucket(bucket):
-                return task, bucket
+            if _in_deadline_bucket(row, bucket, today):
+                return row, bucket
     raise AssertionError("no seeded task falls in a deadline bucket")
 
 
@@ -374,14 +453,19 @@ def expected_result_line(matches: int, total: int, *, filtered: bool) -> str:
         matches: How many tasks the filters selected.
         total: How many tasks the board holds.
         filtered: Whether at least one filter is applied. The line reads differently
-            in the two cases, and a filter applied but empty must still say how many
-            of the whole board it matched.
+            in the two cases, and a filter applied to a board that holds tasks must
+            still say how many of the whole board it matched. A filter applied to a
+            board with no tasks at all matches no "of" line, because there is nothing
+            to be a fraction of.
 
     Returns:
         The count line as the template renders it, with no surrounding markup.
     """
-    if filtered:
-        return f"{matches} of {total} tasks match these filters"
+    if filtered and total:
+        return (
+            f"{matches} of {total} task{'' if total == 1 else 's'}"
+            f" match{'es' if matches == 1 else ''} these filters"
+        )
     return "1 task" if total == 1 else f"{total} tasks"
 
 
@@ -550,15 +634,15 @@ def test_assignee_filter_returns_exactly_that_members_tasks(
 
 @pytest.mark.parametrize("bucket", DEADLINE_BUCKETS)
 def test_deadline_filter_returns_exactly_that_bucket(
-    seeded_client: FlaskClient, bucket: str
+    app: Flask, seeded_client: FlaskClient, bucket: str
 ) -> None:
     """One case per deadline bucket, including the one that selects no deadline."""
     _assert_filtered_list(
-        seeded_client, {"deadline": bucket}, titles_in_deadline_bucket(bucket)
+        seeded_client, {"deadline": bucket}, titles_in_deadline_bucket(bucket, app)
     )
 
 
-def test_overdue_excludes_finished_work(seeded_client: FlaskClient) -> None:
+def test_overdue_excludes_finished_work(app: Flask, seeded_client: FlaskClient) -> None:
     """Work that is finished is not late, so the overdue bucket leaves it out.
 
     The dataset holds completed tasks whose deadline has passed, so this is asserted
@@ -570,7 +654,7 @@ def test_overdue_excludes_finished_work(seeded_client: FlaskClient) -> None:
         "SAMPLE_DATA holds no completed task whose deadline has passed"
     )
 
-    overdue = titles_in_deadline_bucket("overdue")
+    overdue = titles_in_deadline_bucket("overdue", app)
     assert overdue.isdisjoint(completed_past_due)
 
     html = _assert_filtered_list(seeded_client, {"deadline": "overdue"}, overdue)
@@ -594,7 +678,9 @@ def test_the_seeded_dataset_makes_every_case_meaningful() -> None:
     """Every bucket asserted above holds rows, and no two tasks share a title.
 
     The first half keeps the parameterized cases from passing vacuously; the second is
-    what lets a set of titles stand for the set of rows.
+    what lets a set of titles stand for the set of rows. The deadline buckets are read
+    from the offsets ``SAMPLE_DATA`` declares -- the dataset's own intent, which needs
+    no calendar date -- so the guard holds however late it runs.
     """
     titles = [task["title"] for task in sample_tasks()]
     assert len(titles) == len(set(titles))
@@ -602,7 +688,7 @@ def test_the_seeded_dataset_makes_every_case_meaningful() -> None:
     assert all(titles_by_status(status) for status in models.TASK_STATUSES)
     assert titles_by_assignee(None)
     assert any(titles_by_assignee(email) for email in sample_member_emails())
-    assert all(titles_in_deadline_bucket(bucket) for bucket in DEADLINE_BUCKETS)
+    assert all(dataset_titles_in_deadline_bucket(bucket) for bucket in DEADLINE_BUCKETS)
     assert titles_completed_and_past_due()
 
 
@@ -640,20 +726,25 @@ def test_three_filters_together_return_their_intersection(
     and the case is not vacuous, while the expectation itself is still derived from
     the dataset rather than from the task that picked the values.
     """
-    probe, bucket = probe_task_and_bucket()
+    probe, bucket = probe_task_and_bucket(app)
 
-    assignee = probe["assignee"]
+    assignee_id = probe["assignee_id"]
+    email_by_id = {member_id: email for email, member_id in member_ids(app).items()}
+    if assignee_id is None:
+        assignee = None
+    else:
+        assert assignee_id in email_by_id, "a seeded task names a member that is absent"
+        assignee = email_by_id[assignee_id]
+
     params = {
         "status": probe["status"],
-        "assignee": (
-            ASSIGNEE_UNASSIGNED if assignee is None else str(member_ids(app)[assignee])
-        ),
+        "assignee": ASSIGNEE_UNASSIGNED if assignee_id is None else str(assignee_id),
         "deadline": bucket,
     }
     expected = (
         titles_by_status(probe["status"])
         & titles_by_assignee(assignee)
-        & titles_in_deadline_bucket(bucket)
+        & titles_in_deadline_bucket(bucket, app)
     )
     assert probe["title"] in expected
 
@@ -661,7 +752,7 @@ def test_three_filters_together_return_their_intersection(
 
 
 def test_a_combination_that_cannot_match_shows_the_no_matches_state(
-    seeded_client: FlaskClient,
+    app: Flask, seeded_client: FlaskClient
 ) -> None:
     """A filtered list that matches nothing is its own state, not an empty table.
 
@@ -669,7 +760,9 @@ def test_a_combination_that_cannot_match_shows_the_no_matches_state(
     work is not late -- so the empty state is asserted without depending on the day or
     on the dataset holding any particular row.
     """
-    expected = titles_by_status("completed") & titles_in_deadline_bucket("overdue")
+    expected = titles_by_status("completed") & titles_in_deadline_bucket(
+        "overdue", app
+    )
     assert expected == set()
 
     _assert_filtered_list(
@@ -742,6 +835,28 @@ def test_an_assignee_naming_no_member_is_rejected(
     _assert_rejected(seeded_client, {"assignee": str(unknown)}, {"assignee"})
 
 
+# Assignee values no stored member id could occupy: one past the range SQLite's
+# signed 64-bit key holds, and one long enough that converting it to an integer would
+# raise rather than produce an id to look up. Both are malformed in the same way, so
+# both take the same 400.
+OVER_RANGE_ASSIGNEES = (
+    pytest.param("9" * 21, id="past-the-signed-64-bit-range"),
+    pytest.param("9" * 4301, id="past-the-integer-digit-limit"),
+)
+
+
+@pytest.mark.parametrize("assignee", OVER_RANGE_ASSIGNEES)
+def test_an_assignee_outside_the_id_range_is_rejected(
+    seeded_client: FlaskClient, assignee: str
+) -> None:
+    """An id bigger than the key column is a bad value, not a server error.
+
+    The value cannot be stored in a member's key, so no lookup can resolve it and the
+    list answers it with the same 400 that names the parameter.
+    """
+    _assert_rejected(seeded_client, {"assignee": assignee}, {"assignee"})
+
+
 def test_the_query_refuses_a_deadline_bucket_outside_the_four(app: Flask) -> None:
     """An unrecognised bucket raises instead of returning the unfiltered table.
 
@@ -805,13 +920,11 @@ def test_every_applied_filter_stays_selected_together(
     app: Flask, seeded_client: FlaskClient
 ) -> None:
     """All three controls show their applied value at once, not only the last one."""
-    probe, bucket = probe_task_and_bucket()
-    assignee = probe["assignee"]
+    probe, bucket = probe_task_and_bucket(app)
+    assignee_id = probe["assignee_id"]
     submitted = {
         "status": probe["status"],
-        "assignee": (
-            ASSIGNEE_UNASSIGNED if assignee is None else str(member_ids(app)[assignee])
-        ),
+        "assignee": ASSIGNEE_UNASSIGNED if assignee_id is None else str(assignee_id),
         "deadline": bucket,
     }
 

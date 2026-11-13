@@ -43,6 +43,7 @@ __all__ = [
     "get_db",
     "init_app",
     "init_db",
+    "unusable_database_error",
 ]
 
 # The DDL lives beside this module, inside the package, and is read through
@@ -58,6 +59,16 @@ _DB_KEY = "db"
 # fix rather than the failure, because the cause is always the same one.
 _MISSING_SEED_MESSAGE = (
     "seed.py was not found at the repository root; run this command from there."
+)
+
+# Shown when the configured database cannot be created, opened or read as SQLite.
+# It names the setting, the resolved path, the library's reason and the fix, so a
+# misconfigured DATABASE is one readable line at the CLI instead of a traceback.
+_UNUSABLE_DATABASE_MESSAGE = (
+    "DATABASE %r cannot be used: %s. Point DATABASE at a path this process can "
+    "create and write; if that file exists and is not a SQLite database, delete "
+    "it and re-run `flask --app app seed-db` to rebuild the schema and the "
+    "sample data."
 )
 
 
@@ -140,6 +151,34 @@ def ensure_schema() -> bool:
         return False
     init_db()
     return True
+
+
+def unusable_database_error(
+    database_path: str, reason: BaseException
+) -> click.ClickException:
+    """Return the CLI error for a configured database the process cannot use.
+
+    The application factory raises the returned exception when it cannot create
+    the folder holding the database or cannot apply the schema to it, so ``flask
+    --app app run``, ``init-db`` and ``seed-db`` all report the misconfiguration
+    as a single ``Error: ...`` line and exit with status 1 instead of printing a
+    library traceback. The exception is chained from ``reason`` by the caller, so
+    the original failure stays available to a debugger without being printed.
+
+    Args:
+        database_path: The resolved path the factory was about to use. It is
+            quoted in the message, so a path holding spaces still reads
+            unambiguously.
+        reason: The ``OSError`` or ``sqlite3.Error`` that made the path unusable;
+            its text supplies the library's own account of what went wrong.
+
+    Returns:
+        The :class:`click.ClickException` naming the ``DATABASE`` setting, the
+        resolved path, the library's reason and the fix.
+    """
+    return click.ClickException(
+        _UNUSABLE_DATABASE_MESSAGE % (database_path, reason)
+    )
 
 
 @click.command("init-db")

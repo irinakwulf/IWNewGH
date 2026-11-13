@@ -19,6 +19,13 @@ module would risk an import cycle.
 
 import os
 
+__all__ = [
+    "DEFAULT_DATABASE",
+    "DEV_SECRET_KEY",
+    "config_mapping",
+    "resolve_database_path",
+]
+
 # Development-only session key, used when SECRET_KEY is not set in the
 # environment. Visibly fake on purpose: it must never be mistaken for a real
 # secret, and no real key is ever committed to the repository.
@@ -61,11 +68,15 @@ def resolve_database_path(
 ) -> str:
     """Return an absolute SQLite path, joining a relative value onto repository_root.
 
-    Flask's own ``app.instance_path`` is deliberately not the base: for a source
-    package it resolves to ``<repo>/app/instance``, while the documented database
-    location is ``<repo>/instance/taskboard.sqlite3``. Resolving against the
-    repository root keeps the default path, the ``.gitignore`` entry and the
-    documented commands pointing at the same file.
+    Flask's own ``app.instance_path`` is deliberately not the base; the base is
+    ``os.path.dirname(app.root_path)``, the repository root. ``DEFAULT_DATABASE``,
+    the ``instance/`` entry in ``.gitignore`` and the documented commands are all
+    fixed relative to the repository root, so resolving from there keeps them
+    pointing at one file, and makes a relative ``DATABASE`` value mean that same
+    file whatever directory the process runs in. ``instance_path`` is not the base
+    because it follows wherever the package is resolved from: for an installed
+    distribution it shifts to ``<prefix>/var/app-instance``, off the documented
+    location.
 
     Args:
         value: The configured database path, absolute or relative to

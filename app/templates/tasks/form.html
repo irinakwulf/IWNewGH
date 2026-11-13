@@ -62,13 +62,13 @@
   <form class="stack" method="post" action="{% if task %}{{ url_for('tasks.edit', task_id=task.id, _method='POST') }}{% else %}{{ url_for('tasks.create', _method='POST') }}{% endif %}" novalidate>
     <div class="stack">
       <label for="title">Title</label>
-      <input class="input" type="text" id="title" name="title" value="{{ values.title|default('', true) }}" maxlength="200" required{% if errors and errors.get('title') %} aria-invalid="true" aria-describedby="title-error"{% endif %}>
+      <input class="input" type="text" id="title" name="title" value="{{ values.title|default('', true) }}" maxlength="{{ FIELD_LIMITS.title }}" required{% if errors and errors.get('title') %} aria-invalid="true" aria-describedby="title-error"{% endif %}>
       {{ field_error(errors, 'title') }}
     </div>
 
     <div class="stack">
       <label for="description">Description</label>
-      <textarea class="textarea" id="description" name="description" rows="4" maxlength="2000"{% if errors and errors.get('description') %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description|default('', true) }}</textarea>
+      <textarea class="textarea" id="description" name="description" rows="4" maxlength="{{ FIELD_LIMITS.description }}"{% if errors and errors.get('description') %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description|default('', true) }}</textarea>
       {{ field_error(errors, 'description') }}
     </div>
 
@@ -86,7 +86,7 @@
     <div class="stack">
       <label for="status">Status</label>
       <select class="select" id="status" name="status"{% if errors and errors.get('status') %} aria-invalid="true" aria-describedby="status-error"{% endif %}>
-        {% for option in ['pending', 'in_progress', 'completed'] %}
+        {% for option in TASK_STATUSES %}
         <option value="{{ option }}"{% if values.status|default('pending', true) == option %} selected{% endif %}>{{ option|status_label }}</option>
         {% endfor %}
       </select>

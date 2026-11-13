@@ -4,39 +4,50 @@
 
   Included by app/templates/tasks/list.html, which owns the page heading, the filter
   bar and the result line ("12 tasks" / "2 of 12 tasks match these filters"), and
-  which is the only caller. It reads exactly two context variables:
+  which is the only caller. It reads exactly three context variables:
 
-      tasks    the Task objects app.services.tasks.list_tasks returned, already
-               filtered and already in display order -- nothing here sorts or
-               filters them again, nor reads members or total_count
-      filters  the app.validation.parse_task_filters values mapping: status,
-               assignee and deadline, each None when that filter is not applied
+      tasks        the Task objects app.services.tasks.list_tasks returned, already
+                   filtered and already in display order -- nothing here sorts or
+                   filters them again, nor reads members
+      filters      the app.validation.parse_task_filters values mapping: status,
+                   assignee and deadline, each None when that filter is not applied
+      total_count  the board's unfiltered row count, which is the one fact that says
+                   whether this list is filtered or simply empty
 
   A table with no rows is never rendered. The list has two genuinely different
-  empty situations and each answers it in its own words: a filtered list that
-  matched nothing offers to clear the filters, while a board with no tasks at all
-  offers to create the first one -- and that create control is the page's only one,
-  because list.html suppresses its toolbar button in the same situation.
+  empty situations, and the board's own total -- never the presence of a filter --
+  is what tells them apart: a board with no task at all offers to create the first
+  one, whatever the query string carries, and that create control is the page's
+  only one because list.html suppresses its toolbar button in the same situation;
+  a board with tasks but none matching offers to clear the filters that excluded
+  them. Both controls are secondary, as the toolbar's own Create task is: the
+  list's primary action is "Apply filters".
 
   Dates, status labels and deadline states are never computed here: they come from
-  the four filters in app/templating.py, so the badge, the deadline column and the
-  deadline filter cannot disagree. The one completed-task rule this file owns is
-  that a completed row shows only its absolute date -- no "Overdue", no "Due
-  today", no "Due soon" -- because finished work is not late.
+  the four filters in app/templating.py, and the deadline cell's whole text comes from
+  its :func:`format_deadline` global, so the badge, the deadline column and the
+  deadline filter cannot disagree. That global drops the relative word on a completed
+  task -- no "Overdue", no "Due today", no "Due in N days" -- because finished work is
+  not late, and deadline_state is the one place that rule lives, so no guard on it is
+  repeated here. A row without a deadline states "No deadline" through the same
+  .deadline span the dated rows use, so the column keeps one type scale and no cell
+  falls back to body text.
 
   Each row's status form carries the three list filters as `filter_status`,
-  `filter_assignee` and `filter_deadline` (empty when that filter is not applied),
-  which is the form-fallback shape app/blueprints/tasks.py::_carried_filters reads,
-  so changing a row's status from a filtered list returns the reviewer to that same
-  filtered list. `origin=list` is that navigation hint; the new status itself posts
-  as `status`, and no URL is ever posted in a field.
+  `filter_assignee` and `filter_deadline`, each of them the empty string only when
+  parse_task_filters returned None for it. That is the form-fallback shape
+  app/blueprints/tasks.py::_carried_filters reads, so changing a row's status from a
+  filtered list returns the reviewer to that same filtered list. `origin=list` is
+  that navigation hint; the new status itself posts as `status`, and no URL is ever
+  posted in a field. The select keeps its visible "Status" label and names the task
+  it changes in aria-label, because a page of rows would otherwise present one
+  accessible name for every row's control.
 #}
 
 {% set applied = filters if filters else {} %}
-{% set has_filters = applied.status or applied.assignee or applied.deadline %}
-{% set deadline_words = {'overdue': 'Overdue', 'today': 'Due today', 'soon': 'Due soon'} %}
+{% set board_total = total_count|default(tasks|length) %}
 {% if not tasks %}
-{% if has_filters %}
+{% if board_total %}
 <div class="empty-state">
   <h2>No tasks match these filters.</h2>
   <p>The filters applied to this list exclude every task on the board.</p>
@@ -46,7 +57,7 @@
 <div class="empty-state">
   <h2>No tasks yet.</h2>
   <p>Create the first task to start tracking work on this project.</p>
-  <a class="button button--primary" href="{{ url_for('tasks.create') }}">Create task</a>
+  <a class="button button--secondary" href="{{ url_for('tasks.create') }}">Create task</a>
 </div>
 {% endif %}
 {% else %}
@@ -65,28 +76,28 @@
     </thead>
     <tbody>
       {% for task in tasks %}
-      {% set state = task.deadline|deadline_state(task.status) if task.status != 'completed' else '' %}
+      {% set state = task.deadline|deadline_state(task.status) %}
       <tr>
         <td><a href="{{ url_for('tasks.detail', task_id=task.id) }}">{{ task.title }}</a></td>
         <td>{{ task.assignee_name if task.assignee_name else 'Unassigned' }}</td>
         <td><span class="badge badge--{{ task.status|replace('_', '-') }}">{{ task.status|status_label }}</span></td>
         <td>
           {% if task.deadline %}
-          <span class="deadline{% if state %} deadline--{{ state }}{% endif %}">{{ task.deadline|format_date }}{% if state %} &middot; {{ deadline_words[state] }}{% endif %}</span>
+          <span class="deadline{% if state %} deadline--{{ state }}{% endif %}">{{ format_deadline(task.deadline, task.status) }}</span>
           {% else %}
-          No deadline
+          <span class="deadline">No deadline</span>
           {% endif %}
         </td>
         <td>{{ task.comment_count }}</td>
         <td>
           <form method="post" action="{{ url_for('tasks.set_status', task_id=task.id) }}">
             <input type="hidden" name="origin" value="list">
-            <input type="hidden" name="filter_status" value="{{ applied.status if applied.status else '' }}">
+            <input type="hidden" name="filter_status" value="{{ applied.status if applied.status is not none else '' }}">
             <input type="hidden" name="filter_assignee" value="{{ applied.assignee if applied.assignee is not none else '' }}">
-            <input type="hidden" name="filter_deadline" value="{{ applied.deadline if applied.deadline else '' }}">
+            <input type="hidden" name="filter_deadline" value="{{ applied.deadline if applied.deadline is not none else '' }}">
             <label for="task-status-{{ task.id }}">Status</label>
-            <select class="select" id="task-status-{{ task.id }}" name="status">
-              {% for option in ['pending', 'in_progress', 'completed'] %}
+            <select class="select" id="task-status-{{ task.id }}" name="status" aria-label="Status for {{ task.title }}">
+              {% for option in TASK_STATUSES %}
               <option value="{{ option }}"{% if task.status == option %} selected{% endif %}>{{ option|status_label }}</option>
               {% endfor %}
             </select>

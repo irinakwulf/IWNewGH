@@ -165,12 +165,14 @@ On a seeded board the dashboard reads Total 12, Completed 3, Pending 5 and In pr
 ```
 
 Run from the repository root, the command exercises every capability through the
-application's own HTTP surface, and reaches past it in three places:
+application's own HTTP surface, and reaches past it only where a direct call proves what
+no request can:
 `tests/test_validation.py` drives the parsers directly, with a `MultiDict` and no client;
 `tests/test_seed.py` opens its own `sqlite3` connection and builds no application;
-and one test in `tests/test_comments.py` calls the comment service directly, because no
-route can reach the branch it proves. Every test gets a temporary SQLite database of its
-own, built from pytest's `tmp_path`, so no test reads or writes
+one test in `tests/test_comments.py` calls the comment service directly, because no
+route can reach the branch it proves; and `tests/test_config.py` drives `app/config.py`
+and the `create_app` factory directly, again with no client. Every test gets a temporary
+SQLite database of its own, built from pytest's `tmp_path`, so no test reads or writes
 `instance/taskboard.sqlite3`.
 
 Coverage is measured over `app/` with branch measurement — `--cov=app --cov-branch` comes
@@ -189,6 +191,7 @@ afterwards.
 | `tests/test_project.py` | The seeded details render, a valid post updates them, an end date before the start date is rejected with nothing written, and the first save creates the single project row. |
 | `tests/test_validation.py` | The parsing layer directly, one case per rule, with no request and no template: typed values and messages asserted as whole mappings and exact strings. |
 | `tests/test_seed.py` | The loader is idempotent and the dataset still covers all three statuses, the unassigned case and the no-deadline case. |
+| `tests/test_config.py` | `app/config.py` directly, with no request and no client: the five keys the default mapping holds, the two environment variables it reads, an empty one falling back to its default, the mapping a caller passes in outranking the environment, and a database path resolved against the repository root, so the same value names the same file whatever directory the process runs in. It also covers two behaviours of `create_app`: the start-up record naming the database the instance serves, and a `DATABASE` the process cannot use arriving as one line that names the setting, the resolved path and the recovery command, the file left as it was. |
 
 `addopts` already applies coverage, so a single module keeps the gate. While iterating on
 one area, skip it for speed:
@@ -327,10 +330,14 @@ their own, so these conventions hold across every screen:
   in both directions, and each change leaves the dashboard correct because the counts are
   recomputed per request.
 - **A deadline** always shows its absolute date. Unfinished work adds one relative word —
-  `Overdue`, `Due today` or `Due soon` — and a completed task adds none, because finished
-  work is not late. `Due soon` covers the same seven-day window as the Due this week
-  filter, today through six days ahead, so the word beside a deadline and the filter can
-  never disagree about which work is imminent.
+  `Overdue`, `Due today` or `Due in N days` — and a completed task adds none, because
+  finished work is not late. `Due in N days` covers the same seven-day window as the Due
+  this week filter, today through six days ahead, so N runs from 1 to 6 and keeps the
+  plural at one day (`Due in 1 days`), which is the wording the interface specifies. The
+  word beside a deadline and the filter can therefore never disagree about which work is
+  imminent, and the date, the middle dot between them and the word are produced together
+  by `app/templating.py`'s `format_deadline`, which both the list and the detail page
+  render, so one deadline reads identically on both screens.
 - **Filters** are three, applied together with `AND` in one `WHERE` clause with bound
   parameters and carried in the query string, so a filtered list can be linked and
   survives a row's status change:
@@ -382,7 +389,7 @@ five minutes and exercises every control the project was asked to make work.
    deadline has passed.
 6. Press Clear filters, open "Collect stakeholder feedback on the copy", press Edit task,
    set its Deadline to tomorrow and save. The detail page shows tomorrow's date with
-   "Due soon".
+   "Due in 1 days".
 7. Back on the list, set the Deadline filter to Overdue and press Apply filters: no task
    matches, and the list offers "No tasks match these filters." with a Clear filters link.
    Pressing it brings all twelve tasks back.
@@ -413,7 +420,8 @@ five minutes and exercises every control the project was asked to make work.
 │   ├── schema.sql              # DDL for project, member, task and comment, plus four indexes
 │   ├── models.py               # Project, Member, Task and Comment dataclasses; TASK_STATUSES and STATUS_LABELS
 │   ├── validation.py           # Form and filter parsing; every rule and every message
-│   ├── templating.py           # Jinja filters: format_date, format_datetime, status_label, deadline_state
+│   ├── templating.py           # Jinja filters: format_date, format_datetime, status_label, deadline_state;
+│   │                           # the format_deadline global that renders a whole deadline indicator
 │   ├── services/               # Business rules: no HTTP, no request object, and their own
 │   │                           #   parameterized statements through app/db.get_db()
 │   │   ├── projects.py         #   get_project, save_project
@@ -435,7 +443,7 @@ five minutes and exercises every control the project was asked to make work.
 │   │   └── errors/             #   400.html, 404.html, 500.html
 │   └── static/css/app.css      # Design tokens on :root and every component style
 ├── seed.py                     # SAMPLE_DATA and seed_database(), shared by the seed-db command and the tests
-├── tests/                      # conftest.py and the seven test modules listed above
+├── tests/                      # conftest.py and the eight test modules listed above
 ├── requirements.txt            # Runtime pins at exact versions
 ├── requirements-dev.txt        # Test pins, including requirements.txt by reference
 ├── pyproject.toml              # Project metadata, pytest options and the 85% coverage gate

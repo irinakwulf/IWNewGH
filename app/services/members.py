@@ -19,6 +19,12 @@ from app.models import Member
 
 __all__ = ["get_member", "list_members"]
 
+# The range SQLite's signed 64-bit INTEGER column can hold. A key outside it names
+# a row that could never exist, and binding one raises ``OverflowError`` instead of
+# matching nothing, so the check has to happen before the statement is built.
+_SQLITE_INTEGER_MIN = -(2**63)
+_SQLITE_INTEGER_MAX = 2**63 - 1
+
 
 def list_members() -> list[Member]:
     """Return every team member ordered by name.
@@ -43,13 +49,19 @@ def get_member(member_id: int | None) -> Member | None:
         member_id: The member's primary key, already parsed to an ``int`` by the
             caller. ``None`` means the field was absent or submitted empty, which
             is answered here without a query: binding ``None`` into ``id = ?``
-            matches nothing and would cost a statement to learn that.
+            matches nothing and would cost a statement to learn that. An id
+            outside SQLite's signed 64-bit range names no member either, and is
+            answered the same way: the column cannot hold it, so no row can carry
+            it, and binding it would raise rather than match nothing.
 
     Returns:
         The matching :class:`app.models.Member`, or ``None`` when no member has
-        that id.
+        that id -- including an id no row could hold, which is decided without a
+        query being spent on it.
     """
     if member_id is None:
+        return None
+    if not _SQLITE_INTEGER_MIN <= member_id <= _SQLITE_INTEGER_MAX:
         return None
     row = get_db().execute(
         "SELECT id, name, role, email, created_at FROM member WHERE id = ?",

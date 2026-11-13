@@ -66,6 +66,12 @@ TITLE_LIMIT = 200
 DESCRIPTION_LIMIT = 2000
 COMMENT_BODY_LIMIT = 1000
 
+# The one character a submitted text value may not keep. SQLite ends a text value at
+# a NUL for its own text functions, so a value stored with one inside could not be
+# read back as the text the parser measured; the parsers remove it while trimming,
+# which is what keeps the accepted value and the stored value the same string.
+NUL = "\x00"
+
 # Submissions that are not the ``YYYY-MM-DD`` calendar form the schema stores: a
 # day-first date, a month and a day that do not exist, the basic ``YYYYMMDD`` form
 # ``date.fromisoformat`` also reads, and a ten-character ISO week date it reads too
@@ -90,6 +96,19 @@ UNKNOWN_MEMBER_ID = "999999"
 UNKNOWN_MEMBER_IDS = (
     pytest.param(UNKNOWN_MEMBER_ID, id="no-such-row"),
     pytest.param("abc", id="not-a-number"),
+)
+
+# Values naming no member because no key could hold them. SQLite's signed 64-bit
+# column stores at most 19 digits, so the first case is already larger than any row
+# could be while staying short enough to convert; the others run past the limit the
+# interpreter puts on an integer string, where ``int()`` raises instead of returning
+# a number to look up. Every one of them must reach the parser's own message rather
+# than an exception.
+OVER_RANGE_MEMBER_IDS = (
+    pytest.param("9" * 19, id="past-the-signed-64-bit-range"),
+    pytest.param("9" * 21, id="one-digit-past-what-a-key-holds"),
+    pytest.param("9" * 400, id="four-hundred-digits"),
+    pytest.param("9" * 4301, id="past-the-integer-digit-limit"),
 )
 
 
@@ -282,6 +301,21 @@ def test_project_description_is_optional_and_bounded(
         assert errors == {"description": MSG_DESCRIPTION_TOO_LONG}
 
 
+def test_project_description_drops_the_nul_character() -> None:
+    """A NUL in the project description is removed rather than stored and shortened.
+
+    SQLite stops a text value at a NUL, so a description kept with one inside would
+    be held as text the parser never accepted; the value the rule returns is the
+    value the database can read back.
+    """
+    values, errors = validation.parse_project_form(
+        _project_form(description=f"Marketing {NUL}site refresh.")
+    )
+
+    assert errors == {}
+    assert values["description"] == "Marketing site refresh."
+
+
 @pytest.mark.parametrize("field", ["start_date", "end_date"])
 @pytest.mark.parametrize("submitted", MALFORMED_DATES)
 def test_project_dates_must_parse(field: str, submitted: str) -> None:
@@ -444,6 +478,68 @@ def test_task_description_is_optional_and_bounded(
 
 
 @pytest.mark.parametrize(
+    ("submitted", "stored"),
+    [
+        pytest.param(f"QA nul{NUL}byte title", "QA nulbyte title", id="inside"),
+        pytest.param(f"{NUL}QA leading{NUL}", "QA leading", id="leading-and-trailing"),
+        pytest.param(f"QA  {NUL} beside", "QA   beside", id="beside-whitespace"),
+    ],
+)
+def test_task_text_drops_the_nul_character(submitted: str, stored: str) -> None:
+    """A NUL inside a title or a description is removed, and nothing else changes.
+
+    SQLite ends a text value at a NUL for its own text functions, so a value stored
+    with one inside could not be read back as the text that was measured and
+    accepted. It is normalised away rather than flagged, because the form's message
+    set is closed and a NUL is not something a reviewer types.
+    """
+    values, errors = validation.parse_task_form(
+        _task_form(title=submitted, description=submitted), None
+    )
+
+    assert errors == {}
+    assert values["title"] == stored
+    assert values["description"] == stored
+    assert not any(
+        NUL in value for value in values.values() if isinstance(value, str)
+    )
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_error"),
+    [
+        pytest.param(
+            "T" * TITLE_LIMIT + NUL * 5, None, id="nuls-removed-within-the-bound"
+        ),
+        pytest.param(
+            "T" * (TITLE_LIMIT + 1) + NUL,
+            MSG_TASK_TITLE_TOO_LONG,
+            id="over-the-bound-without-the-nul",
+        ),
+    ],
+)
+def test_task_title_length_is_measured_after_the_nul_is_removed(
+    title: str, expected_error: str | None
+) -> None:
+    """The 200-character bound counts the characters that are actually stored."""
+    values, errors = validation.parse_task_form(_task_form(title=title), None)
+
+    assert values["title"] == title.replace(NUL, "")
+    if expected_error is None:
+        assert errors == {}
+    else:
+        assert errors == {"title": expected_error}
+
+
+def test_task_title_of_only_a_nul_character_is_required() -> None:
+    """Once its NUL is removed a title of nothing is the missing title it is."""
+    values, errors = validation.parse_task_form(_task_form(title=NUL), None)
+
+    assert errors == {"title": MSG_ENTER_TASK_TITLE}
+    assert values["title"] == ""
+
+
+@pytest.mark.parametrize(
     "assignee_id",
     [pytest.param(None, id="absent"), pytest.param("", id="empty")],
 )
@@ -481,6 +577,53 @@ def test_task_assignee_must_name_an_existing_member(
 
     assert errors == {"assignee_id": MSG_SELECT_TEAM_MEMBER}
     assert values["assignee_id"] is None
+
+
+@pytest.mark.parametrize("assignee_id", OVER_RANGE_MEMBER_IDS)
+def test_task_assignee_outside_the_id_range_names_no_member(
+    app_context: None, assignee_id: str
+) -> None:
+    """An id no key could hold is rejected as a member that does not exist.
+
+    The value is either larger than the column can store or too long to convert, so
+    it cannot name a member: the field's own message is what the form shows, and no
+    value is handed to the service.
+    """
+    values, errors = validation.parse_task_form(
+        _task_form(assignee_id=assignee_id), None
+    )
+
+    assert errors == {"assignee_id": MSG_SELECT_TEAM_MEMBER}
+    assert values["assignee_id"] is None
+
+
+@pytest.mark.parametrize("padding", [4, 19, 25])
+def test_task_assignee_leading_zeros_still_name_the_member(
+    app_context: None, sample_member_id: int, padding: int
+) -> None:
+    """Leading zeros do not change which member an id names.
+
+    Zero padding makes the submitted run longer than an id can be written in, but
+    the number it writes is the same one, so the member is resolved. The bound that
+    keeps an over-long run away from ``int()`` therefore counts the significant
+    digits rather than every character.
+    """
+    assignee_id = "0" * padding + str(sample_member_id)
+
+    values, errors = validation.parse_task_form(
+        _task_form(assignee_id=assignee_id), None
+    )
+
+    assert errors == {}
+    assert values["assignee_id"] == sample_member_id
+
+
+def test_a_assignee_of_only_zeros_names_no_member(app_context: None) -> None:
+    """A run of zeros is id zero, which no member row holds, however long it is."""
+    values, errors = validation.parse_task_filters(MultiDict({"assignee": "0" * 4301}))
+
+    assert errors == {"assignee": MSG_INVALID_FILTER_ASSIGNEE}
+    assert values == NO_FILTERS
 
 
 def test_task_status_defaults_to_pending_when_the_form_names_none() -> None:
@@ -641,6 +784,21 @@ def test_comment_author_is_required(app_context: None, author_id: str | None) ->
     assert values["author_id"] is None
 
 
+@pytest.mark.parametrize("author_id", OVER_RANGE_MEMBER_IDS)
+def test_comment_author_outside_the_id_range_names_no_member(
+    app_context: None, author_id: str
+) -> None:
+    """An id no key could hold names no author, so the author is rejected.
+
+    A comment has to be attributed to someone, so the value that cannot name a member
+    is the missing-author message rather than an accepted id.
+    """
+    values, errors = validation.parse_comment_form(_comment_form(author_id=author_id))
+
+    assert errors == {"author_id": MSG_SELECT_COMMENT_AUTHOR}
+    assert values["author_id"] is None
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -659,6 +817,18 @@ def test_comment_body_is_required(
 
     assert errors == {"body": MSG_ENTER_COMMENT}
     assert values["body"] == ""
+
+
+def test_comment_body_drops_the_nul_character(
+    app_context: None, sample_member_id: int
+) -> None:
+    """A NUL in a comment body is removed, so the stored body is the accepted text."""
+    values, errors = validation.parse_comment_form(
+        _comment_form(author_id=str(sample_member_id), body=f"QA nul{NUL}body probe")
+    )
+
+    assert errors == {}
+    assert values == {"author_id": sample_member_id, "body": "QA nulbody probe"}
 
 
 @pytest.mark.parametrize(
@@ -774,6 +944,21 @@ def test_assignee_filter_rejects_an_unknown_member(
     app_context: None, assignee: str
 ) -> None:
     """An id that names no member is reported rather than silently dropped."""
+    values, errors = validation.parse_task_filters(MultiDict({"assignee": assignee}))
+
+    assert errors == {"assignee": MSG_INVALID_FILTER_ASSIGNEE}
+    assert values == NO_FILTERS
+
+
+@pytest.mark.parametrize("assignee", OVER_RANGE_MEMBER_IDS)
+def test_assignee_filter_outside_the_id_range_is_rejected(
+    app_context: None, assignee: str
+) -> None:
+    """An id no key could hold is reported just as an id that names nobody is.
+
+    The value cannot be resolved to a member at all, so it must not be silently
+    dropped: the filter's own message is returned and no filter value is applied.
+    """
     values, errors = validation.parse_task_filters(MultiDict({"assignee": assignee}))
 
     assert errors == {"assignee": MSG_INVALID_FILTER_ASSIGNEE}

@@ -32,11 +32,12 @@
     <label for="filter-status">Status</label>
     <select class="select" id="filter-status" name="status">
       <option value=""{% if not filters or filters.status is none or filters.status is not defined %} selected{% endif %}>All</option>
-      {# The three members of TASK_STATUSES in app/models.py, in the same order as
-         the schema's CHECK constraint. The values are mirrored literally because a
-         template cannot import that tuple; the labels are not repeated, they come
-         from the status_label filter so STATUS_LABELS stays the single source. #}
-      {% for option in ["pending", "in_progress", "completed"] %}
+      {# The members of TASK_STATUSES, in the same order as the schema's CHECK
+         constraint. The values come from the TASK_STATUSES global app/__init__.py
+         publishes, so this form cannot offer a status the filter parser rejects;
+         the labels still come from the status_label filter so STATUS_LABELS stays
+         the single source. #}
+      {% for option in TASK_STATUSES %}
       <option value="{{ option }}"{% if filters and filters.status == option %} selected{% endif %}>{{ option|status_label }}</option>
       {% endfor %}
     </select>

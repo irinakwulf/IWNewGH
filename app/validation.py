@@ -22,13 +22,15 @@ same bound is described by one string whether the form is a task or a project,
 and changing how a rule reads is a change in one place.
 
 Three boundaries decide what is not here. No web-framework object is imported --
-the parsers receive mappings, which is what lets the whole rule set be unit-tested
-without an application or a request. No SQL is executed here: a submitted member
-id is checked through :func:`app.services.members.get_member`, the same check
-behind the assignee field, the assignee filter and the comment author, so those
-three controls cannot disagree about who exists. That lookup is the module's only
-service call, and it only reads: this module decides what a value is, never what
-to do with it, so nothing here can change stored data.
+the parsers receive mappings, which is what lets the pure rules be unit-tested
+with no request at all. The three member-resolving paths -- the assignee field,
+the assignee filter and the comment author -- need an application context and
+never a request, because the existence check reads the member table through
+:func:`app.services.members.get_member`. No SQL is executed here: a submitted
+member id is checked through that same function, so those three controls cannot
+disagree about who exists. That lookup is the module's only service call, and it
+only reads: this module decides what a value is, never what to do with it, so
+nothing here can change stored data.
 
 The task-list parser is the only one whose errors a view answers differently: a
 write re-renders its own form, whereas a filter value outside its allowed set is a
@@ -49,6 +51,7 @@ __all__ = [
     "ASSIGNEE_UNASSIGNED",
     "DEADLINE_FILTERS",
     "DEFAULT_STATUS",
+    "FIELD_LIMITS",
     "Form",
     "MSG_COMMENT_BODY_TOO_LONG",
     "MSG_DEADLINE_BEFORE_PROJECT_START",
@@ -127,6 +130,16 @@ _TITLE_LIMIT = 200
 _DESCRIPTION_LIMIT = 2000
 _COMMENT_BODY_LIMIT = 1000
 
+# The same bounds, named for the templates: a control's maxlength is a hint the
+# browser applies, and it must not be able to disagree with the sentence the parser
+# returns. app/__init__.py exposes this mapping to Jinja, so a form reads the bound
+# instead of restating the number.
+FIELD_LIMITS: dict[str, int] = {
+    "title": _TITLE_LIMIT,
+    "description": _DESCRIPTION_LIMIT,
+    "comment_body": _COMMENT_BODY_LIMIT,
+}
+
 # The status a task takes when a submission names none, matching the column
 # default in app/schema.sql.
 DEFAULT_STATUS: str = "pending"
@@ -144,6 +157,13 @@ DEADLINE_FILTERS: tuple[str, ...] = ("overdue", "today", "week", "none")
 # rather than an id, so it can never be confused with one.
 ASSIGNEE_UNASSIGNED = "unassigned"
 
+# The one control character a submitted text value loses. SQLite ends a text value
+# at a NUL for its own text functions -- length(), a comparison, LIKE -- so a
+# character stored inside one could not be read back as the value the parser
+# measured and accepted. Removing it here is what keeps the value the interface
+# accepted and the value the database holds the same string.
+_NUL_CHARACTER = "\x00"
+
 _ISO_DATE_LENGTH = 10
 _ISO_DATE_SEPARATOR = "-"
 # Position 4 is the month separator and 7 the day separator in YYYY-MM-DD.
@@ -151,6 +171,12 @@ _ISO_DATE_SEPARATOR_POSITIONS = frozenset({4, 7})
 # ASCII digits only: str.isdigit() is true of characters date.fromisoformat cannot
 # read, so membership in this set is the check that matters.
 _ASCII_DIGITS = frozenset("0123456789")
+# The most digits a member id can be written in: SQLite's signed 64-bit INTEGER
+# column holds at most 19, so a longer run cannot name a row. The length is checked
+# before ``int()`` is called because converting a long enough run raises
+# ``ValueError`` for exceeding the interpreter's digit limit rather than returning a
+# number a lookup could reject.
+_MEMBER_ID_MAX_DIGITS = 19
 
 
 # --------------------------------------------------------------------------
@@ -228,10 +254,17 @@ def _trim(raw: str | None) -> str:
     Trimming happens before a required check and before a length check, so a field
     of spaces is empty rather than two characters long, and a title padded with
     spaces is measured without them.
+
+    Trimming also removes the NUL character, because SQLite's text functions end a
+    string at a NUL: a value stored with one inside could not be read back as the
+    text that was accepted and measured, so the interface and the database would
+    hold different strings. It is normalised away rather than flagged, because the
+    message set a form can show is closed and a NUL is not something a reviewer
+    typing into the form ever submits.
     """
     if raw is None:
         return ""
-    return raw.strip()
+    return raw.replace(_NUL_CHARACTER, "").strip()
 
 
 def _required_text(
@@ -295,11 +328,20 @@ def _resolve_member(text: str) -> models.Member | None:
     This is the single existence check behind the assignee field, the assignee
     filter and the comment author: one lookup, so the three controls cannot
     disagree about who is on the team. A value that is not a run of ASCII digits
-    names no member without a query being spent on it.
+    names no member without a query being spent on it, and so does a run with more
+    significant digits than an id can be written in -- the most a signed 64-bit key
+    holds is nineteen -- because converting a long enough run would raise instead of
+    resolving. Leading zeros are not significant: they name the same number they
+    always did, and a run of zeros alone is id zero. An id within that length but
+    outside the range a row can store is answered by
+    :func:`app.services.members.get_member`, which names no member for it too.
     """
     if not (text.isascii() and text.isdigit()):
         return None
-    return members.get_member(int(text))
+    significant = text.lstrip("0")
+    if len(significant) > _MEMBER_ID_MAX_DIGITS:
+        return None
+    return members.get_member(int(significant or "0"))
 
 
 def _assignee_value(raw: str | None) -> tuple[int | None, str | None]:
