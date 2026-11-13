@@ -10,8 +10,8 @@ deliverable rather than extras.
 
 A server-rendered Flask application backed by one SQLite file. Every interaction is a
 link or an HTML form post; no page ships a script and there is no build step. One Python
-process serves the whole product, and a fresh checkout starts on the documented sample
-board after two setup commands.
+process serves the whole product, and a fresh checkout opens on the documented sample
+board once the environment, install and seed commands below have run.
 
 The capabilities are the ones the project was asked for, and each has one control and one
 place it is tested:
@@ -93,10 +93,10 @@ fails at its ensurepip step and leaves `.venv/bin/` holding only `python`, `pyth
 python3 -m pip install --root-user-action=ignore --target .venv/lib/python3.12/site-packages -r requirements-dev.txt
 ```
 
-A `--target` install creates no console scripts, which is why every command is run as
-`python -m`. Where `ensurepip` is intact, the ordinary
-`./.venv/bin/python -m pip install -r requirements-dev.txt` form above works and is
-shorter.
+A `--target` install writes its console scripts into `<target>/bin`, which is not on
+`PATH`; that is why every command is run as `python -m`. Where `ensurepip` is intact, the
+ordinary `./.venv/bin/python -m pip install -r requirements-dev.txt` form above works
+and is shorter.
 
 If no virtual environment can be created at all, the equivalent is the system interpreter
 with its own package directory:
@@ -164,9 +164,14 @@ On a seeded board the dashboard reads Total 12, Completed 3, Pending 5 and In pr
 ./.venv/bin/python -m pytest
 ```
 
-Run from the repository root, the command exercises the whole product through the
-application's own HTTP surface. Every test gets a temporary SQLite database of its own,
-built from pytest's `tmp_path`, so no test reads or writes `instance/taskboard.sqlite3`.
+Run from the repository root, the command exercises every capability through the
+application's own HTTP surface, and reaches past it in three places:
+`tests/test_validation.py` drives the parsers directly, with a `MultiDict` and no client;
+`tests/test_seed.py` opens its own `sqlite3` connection and builds no application;
+and one test in `tests/test_comments.py` calls the comment service directly, because no
+route can reach the branch it proves. Every test gets a temporary SQLite database of its
+own, built from pytest's `tmp_path`, so no test reads or writes
+`instance/taskboard.sqlite3`.
 
 Coverage is measured over `app/` with branch measurement — `--cov=app --cov-branch` comes
 from `addopts` in `pyproject.toml` — and the run fails below a hard floor of
@@ -197,7 +202,9 @@ one area, skip it for speed:
 There is no JSON API. The application's whole external contract is twelve endpoints that
 accept HTML form posts and return HTML pages, and requests are
 `application/x-www-form-urlencoded`. Every field arrives as a string and is parsed and
-typed in `app/validation.py`.
+typed in `app/validation.py`. Two of the form paths below, `/tasks/new` and
+`/tasks/<id>/edit`, also accept a post on themselves, so the application serves fourteen
+method-and-path rules in all for these twelve contract endpoints.
 
 | Method and path | Input | Response |
 |-----------------|-------|----------|
@@ -295,7 +302,7 @@ Completed**. The counts are derived on every request from one grouped aggregate 
 cannot leave a stale figure on screen.
 
 The eight comments are spread across six tasks, two on "Implement the new hero component"
-and two on "Collect stakeholder feedback on the copy", with distinct authors and
+and two on "Collect stakeholder feedback on the copy", with varied authors and distinct
 timestamps. That gives the comment list, its oldest-first ordering and the Comments column
 real content, and their timestamps are distinct by construction so the order never depends
 on insertion timing.
@@ -407,13 +414,15 @@ five minutes and exercises every control the project was asked to make work.
 │   ├── models.py               # Project, Member, Task and Comment dataclasses; TASK_STATUSES and STATUS_LABELS
 │   ├── validation.py           # Form and filter parsing; every rule and every message
 │   ├── templating.py           # Jinja filters: format_date, format_datetime, status_label, deadline_state
-│   ├── services/               # Business rules, with no HTTP and no SQL of their own
+│   ├── services/               # Business rules: no HTTP, no request object, and their own
+│   │                           #   parameterized statements through app/db.get_db()
 │   │   ├── projects.py         #   get_project, save_project
 │   │   ├── members.py          #   list_members, get_member
 │   │   ├── tasks.py            #   list_tasks, get_task, create_task, update_task, set_status, set_assignee
 │   │   ├── comments.py         #   list_comments, add_comment
 │   │   └── metrics.py          #   dashboard_metrics
-│   ├── blueprints/             # The twelve routes: parse, call one service, render or redirect
+│   ├── blueprints/             # The twelve contract endpoints, plus a post on each form path:
+│   │                           #   parse, call one service, render or redirect
 │   │   ├── dashboard.py        #   GET /
 │   │   ├── tasks.py            #   the list, create, detail, edit, status, assign and comment routes
 │   │   └── project.py          #   GET and POST /project
