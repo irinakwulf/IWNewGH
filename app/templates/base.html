@@ -1,0 +1,78 @@
+{#
+  The page shell: the document skeleton, the header and navigation, the flash
+  region, the 1080px content column and the footer.
+
+  Every view template -- dashboard.html, project.html, the three task templates
+  and the three error pages -- extends this file and fills exactly two blocks:
+  `title`, the page's own words in the browser tab, which every view composes
+  as `<page> · Taskboard` -- its own words, a middle dot and the product name
+  appended -- and which falls back to the product name alone when a view sets
+  none; and `content`, the screen itself. Neither may be renamed or removed.
+  The page's single top-level heading belongs to the view's content block
+  rather than to this file -- the header's product name is plain text, not a
+  heading -- so no screen ends up with two.
+
+  The navigation's current link is computed here, server-side, from
+  `request.endpoint`, because this application ships no JavaScript: nothing in
+  the template tree carries a script element or an inline event handler
+  attribute. Exactly one link can ever be marked -- Dashboard for
+  `dashboard.index`, Tasks for any `tasks.*` endpoint (the list, the form, the
+  detail view and the page a rejected post re-renders), and Project for
+  `project.view`. A request that matches no route at all leaves `request.endpoint`
+  None -- which is how a task id nowhere near a task route, and the generic error
+  paths, render -- and then no link is marked, because the visitor is on none of
+  the three screens. The mark follows the endpoint and never the response status,
+  so a 404 raised from inside a task route keeps Tasks marked: the visitor is
+  still in that section, and clearing the mark on the way to an error page would
+  have to special-case every abort the views make.
+
+  The flash region sits immediately below the header and is included on its own,
+  with no wrapper element around it: partials/_flash.html owns what it renders.
+
+  Every value this file renders is a literal declared in it or a URL built by
+  `app_path`, the global app/templating.py registers; no request parameter is read
+  and no user text reaches it, so there is nothing here to escape and no filter or
+  conversion that could bypass the autoescaping Jinja applies to every `.html`
+  template. `app_path` rather than `url_for` is the rule for this file and for the
+  three error pages: `url_for` builds through the request's URL adapter, and a
+  request whose `Host` header cannot be encoded -- a label longer than 63
+  characters -- is refused before one is bound, so this shell would fail to render
+  for the very error page that has to answer that request. `app_path` reads the
+  application's URL map alone and yields the same paths. The classes are the ones
+  app/static/css/app.css defines -- `.header`, `.nav`, `.container`, `.footer` and
+  the `.row` primitive -- and every style comes from that stylesheet: this file
+  carries no inline style attribute, no second stylesheet, no font, no image and
+  no icon file. The head does declare an icon, through an empty `data:` URI, so
+  the browser stops requesting a /favicon.ico the application does not ship.
+#}
+{%- set product_name = 'Taskboard' -%}
+{%- set endpoint = request.endpoint or '' -%}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{{ product_name }}{% endblock %}</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="{{ app_path('static', filename='css/app.css') }}">
+  </head>
+  <body>
+    <header class="header">
+      <div class="container row">
+        <span>{{ product_name }}</span>
+        <nav class="nav" aria-label="Main">
+          <a href="{{ app_path('dashboard.index') }}"{% if endpoint == 'dashboard.index' %} aria-current="page"{% endif %}>Dashboard</a>
+          <a href="{{ app_path('tasks.list') }}"{% if endpoint.startswith('tasks.') %} aria-current="page"{% endif %}>Tasks</a>
+          <a href="{{ app_path('project.view') }}"{% if endpoint == 'project.view' %} aria-current="page"{% endif %}>Project</a>
+        </nav>
+      </div>
+    </header>
+    {% include "partials/_flash.html" %}
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="footer">
+      <div class="container">{{ product_name }} is a local, single-project task manager used to exercise the interface.</div>
+    </footer>
+  </body>
+</html>

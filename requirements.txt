@@ -1,0 +1,14 @@
+# Runtime dependencies: Flask 3.1.3 and its own runtime closure, pinned exactly.
+#
+# Test-time dependencies are declared in requirements-dev.txt, which pulls this
+# file in with `-r requirements.txt`; install everything with
+# `pip install -r requirements-dev.txt`, so this filename is never typed alone.
+#
+# Purpose of each pin, one line apiece:
+Flask==3.1.3  # the web framework, pinned with the rest of its runtime closure
+Werkzeug==3.1.9  # the WSGI toolkit and development server Flask runs on; supplies BadRequest and the HTTP exceptions the error handlers use
+Jinja2==3.1.6  # the template engine whose autoescaping every template relies on
+itsdangerous==2.2.0  # signs the session cookie that carries flash messages
+MarkupSafe==3.0.4  # the escaping machinery behind Jinja autoescaping
+click==8.5.0  # the command-line framework behind `flask --app app init-db` and `flask --app app seed-db`
+blinker==1.9.0  # the signal support Flask imports at start-up

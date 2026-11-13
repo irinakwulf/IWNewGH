@@ -1,0 +1,157 @@
+{#
+  The task detail screen -- and the same page re-rendered after a rejected comment
+  post, which is why the add-comment form reads `values` and `errors` rather than
+  the stored comment.
+
+  Context, all of it built by app/blueprints/tasks.py::_render_task_detail:
+
+      task      the app.models.Task the page is about; the view has already turned
+                an unknown id into the 404 page, so it is never None here
+      comments  that task's conversation, oldest first, each carrying its
+                author_name -- nothing here sorts, filters or counts them
+      members   the options for the assign select and the comment-author select
+      values    the add-comment form's field values: empty on the page's own GET,
+                the submitted ones after a rejection, so the typed body survives
+      errors    the comment parser's {field: message} map, empty on a first render
+
+  Three forms sit on this page and each owns one action: update the status, assign
+  to a member, add a comment. Each quick action posts only its own field to its own
+  route, through a form of its own, and the page keeps one primary button -- the
+  comment form's -- so both quick actions are secondary, the same weight the task
+  list gives the same status change. Because those two forms render no box, their
+  selects and buttons stand beside them and name them with `form="..."`, which
+  leaves the document order as the reading and tab order. Each form is also named
+  for its action with an `aria-label`, so the three action groups are
+  distinguishable when navigating by form. Both quick actions carry a hidden
+  `origin` of `detail`, which is a navigation hint only: the view uses it to
+  choose between two redirect targets it names itself, and no field ever carries
+  a URL. Neither form offers a `next`/`redirect` input, so no redirect target is
+  request-supplied.
+
+  `required` and `novalidate` are one decision here, not two. The controls the
+  comment parser refuses when they are absent -- the author select and the body
+  textarea -- declare `required`, so the form itself states which fields are
+  mandatory instead of leaving a screen-reader user to learn it from a rejection.
+  `novalidate` on the form is what keeps that declaration from taking over the
+  submission: the attribute says what app/validation.py enforces, so the browser
+  must not answer a blank control with a bubble of its own in place of the
+  parser's sentence. The task form pairs the two the same way, for the same
+  reason, so both data-entry forms signal a mandatory field identically.
+
+  Presentation is delegated: dates, timestamps, status labels and deadline states
+  come from the four filters in app/templating.py, and the deadline's whole text --
+  its absolute date, separator and relative word -- comes from its
+  :func:`format_deadline` global, so this file writes no day count and no deadline
+  wording of its own. Validation messages come from the macros in
+  partials/_field_errors.html, so no sentence the parser owns is repeated here. The
+  indicator states no word at all on a completed task -- `format_deadline` leaves it
+  out because finished work is not late -- so the deadline block below renders its
+  text without a second status check. That value never falls blank and states one of
+  three things: the indicator for a stored date, the stored text as it stands for a
+  value no date can be read from -- which only a hand-edited or restored row holds --
+  and "No deadline" for a task whose deadline is absent. Every value rendered here goes
+  through Jinja's autoescaping: the file uses no filter or global that would bypass it,
+  carries no inline style or event-handler attribute, and needs no client-side code --
+  its controls are plain server-rendered form submissions.
+#}
+{% extends "base.html" %}
+{% from "partials/_field_errors.html" import error_summary, field_error %}
+
+{% block title %}{{ task.title }} · Taskboard{% endblock %}
+
+{% block content %}
+<h1>{{ task.title }}</h1>
+
+<dl>
+  <dt>Description</dt>
+  <dd>{% if task.description %}{{ task.description }}{% else %}No description.{% endif %}</dd>
+  <dt>Assignee</dt>
+  <dd>{{ task.assignee_name|default('Unassigned', true) }}</dd>
+  <dt>Status</dt>
+  <dd><span class="badge badge--{{ task.status|replace('_', '-') }}">{{ task.status|status_label }}</span></dd>
+  <dt>Deadline</dt>
+  <dd>
+    {%- set state = task.deadline|deadline_state(task.status) -%}
+    <span class="deadline{% if state %} deadline--{{ state }}{% endif %}">{{ format_deadline(task.deadline, task.status) or 'No deadline' }}</span>
+  </dd>
+  <dt>Created</dt>
+  <dd>{{ task.created_at|format_datetime }}</dd>
+  <dt>Updated</dt>
+  <dd>{{ task.updated_at|format_datetime }}</dd>
+</dl>
+
+<div class="quick-actions">
+  <form id="task-status-form" method="post" action="{{ url_for('tasks.set_status', task_id=task.id) }}" aria-label="Update status">
+    <input type="hidden" name="origin" value="detail">
+  </form>
+  <form id="task-assign-form" method="post" action="{{ url_for('tasks.set_assignee', task_id=task.id) }}" aria-label="Assign task">
+    <input type="hidden" name="origin" value="detail">
+  </form>
+
+  <div class="stack">
+    <label for="status">Status</label>
+    <select class="select" id="status" name="status" form="task-status-form">
+      {%- for option in TASK_STATUSES %}
+      <option value="{{ option }}"{% if task.status == option %} selected{% endif %}>{{ option|status_label }}</option>
+      {%- endfor %}
+    </select>
+  </div>
+
+  <div class="stack">
+    <label for="assignee_id">Assignee</label>
+    <select class="select" id="assignee_id" name="assignee_id" form="task-assign-form">
+      <option value=""{% if not task.assignee_id %} selected{% endif %}>Unassigned</option>
+      {% for member in members %}
+      <option value="{{ member.id }}"{% if task.assignee_id == member.id %} selected{% endif %}>{{ member.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+
+  <button class="button button--secondary" type="submit" form="task-status-form">Update status</button>
+  <button class="button button--secondary" type="submit" form="task-assign-form">Assign</button>
+</div>
+
+<div class="row">
+  <a class="button button--secondary" href="{{ url_for('tasks.edit', task_id=task.id, _method='GET') }}">Edit task</a>
+  <a class="button button--secondary" href="{{ url_for('tasks.list') }}">Back to tasks</a>
+</div>
+
+<h2>Comments</h2>
+{% if comments %}
+<ol>
+  {% for comment in comments %}
+  <li>
+    <p><strong>{{ comment.author_name }}</strong> <time datetime="{{ comment.created_at|replace(' ', 'T') }}">{{ comment.created_at|format_datetime }}</time></p>
+    <p>{{ comment.body }}</p>
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<div class="empty-state">
+  <p>No comments yet.</p>
+</div>
+{% endif %}
+
+<h2>Add a comment</h2>
+{{ error_summary(errors) }}
+<form class="stack" method="post" action="{{ url_for('tasks.add_comment', task_id=task.id) }}" novalidate aria-label="Add comment">
+  <div class="stack">
+    <label for="author_id">Author</label>
+    <select class="select" id="author_id" name="author_id" required{% if errors.author_id %} aria-invalid="true" aria-describedby="author_id-error"{% endif %}>
+      <option value=""{% if not values.author_id %} selected{% endif %}>Select an author</option>
+      {% for member in members %}
+      <option value="{{ member.id }}"{% if values.author_id|string == member.id|string %} selected{% endif %}>{{ member.name }}</option>
+      {% endfor %}
+    </select>
+    {{ field_error(errors, 'author_id') }}
+  </div>
+  <div class="stack">
+    <label for="body">Comment</label>
+    <textarea class="textarea" id="body" name="body" rows="4" maxlength="{{ FIELD_LIMITS.comment_body }}" required{% if errors.body %} aria-invalid="true" aria-describedby="body-error"{% endif %}>{{ values.body|default('', true) }}</textarea>
+    {{ field_error(errors, 'body') }}
+  </div>
+  <div class="row">
+    <button class="button button--primary" type="submit">Add comment</button>
+  </div>
+</form>
+{% endblock %}

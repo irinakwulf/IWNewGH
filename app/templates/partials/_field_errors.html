@@ -1,0 +1,50 @@
+{#
+  Inline form errors: the two macros every form in the application renders with.
+
+  Imported by app/templates/project.html, app/templates/tasks/form.html and
+  app/templates/tasks/detail.html as
+
+      {% from "partials/_field_errors.html" import error_summary, field_error %}
+
+  `error_summary(errors)` renders the block that sits above the form: a lead-in
+  sentence and one list item per message, so a reviewer sees every problem at once
+  instead of finding them one submission at a time.
+
+  `field_error(errors, field)` renders the single message for one field, beside
+  that field. The message element carries the id `<field>-error`, composed here
+  from the field name the macro is handed, and that id is a contract shared with
+  the call sites rather than a detail of this file: each caller spells the same id
+  out literally in its control's `aria-describedby` -- alone, or ahead of the
+  field's hint id where the control has one -- and sets `aria-invalid="true"` on
+  that control, which is what announces the message with the field it belongs to.
+  app/templates/project.html, app/templates/tasks/form.html and
+  app/templates/tasks/detail.html hold those call sites, so renaming the
+  convention here without renaming it there silently breaks the association on
+  every form. The message text does stay this file's: a caller passes `errors`
+  through and never writes the sentence itself.
+
+  `errors` is the `{field: message}` mapping app/validation.py returns, and is
+  empty exactly when the submission was accepted. Messages are rendered exactly as
+  the parser produced them -- never reworded, reordered or truncated -- because the
+  wording is asserted by the tests, and both macros autoescape, so a message is
+  text even if it contains markup.
+#}
+
+{% macro error_summary(errors) -%}
+{%- if errors -%}
+<div class="field-error__summary" role="alert">
+  <p>There is a problem with this form. Please correct the fields below.</p>
+  <ul>
+    {%- for message in errors.values() %}
+    <li>{{ message }}</li>
+    {%- endfor %}
+  </ul>
+</div>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro field_error(errors, field) -%}
+{%- if errors and errors.get(field) -%}
+<p class="field-error" id="{{ field }}-error">{{ errors[field] }}</p>
+{%- endif -%}
+{%- endmacro %}

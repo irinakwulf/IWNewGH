@@ -1,0 +1,44 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime data: instance/taskboard.sqlite3 is the disposable local database, created at
+# start-up and rebuilt by `flask --app app seed-db`, so it is never committed. The
+# directory rule covers that default location, which the documented commands use; the
+# name rules cover the same file when `DATABASE` points somewhere else, and the -wal,
+# -shm and -journal sidecars a live database keeps beside it under WAL mode.
+instance/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution build output: a `pip install .` build of this project, which the
+# [project] table in pyproject.toml makes pip run through the setuptools backend
+*.egg-info/
+build/
+dist/
+
+# Test and coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Environment files
+.env
+.env.*
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

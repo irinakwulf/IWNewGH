@@ -1,0 +1,40 @@
+{#
+  One dashboard metric: the count first, its label beneath it, and the whole card a
+  single link into the task list, so every number on the dashboard is one click away
+  from the rows behind it.
+
+  Imported by app/templates/dashboard.html, which owns the grid the four cards sit in,
+  as
+
+      {% from "partials/_metric_card.html" import metric_card %}
+
+  and calls this macro once per card, positionally, with the metric's label, its count
+  and the URL the card opens:
+
+      {{ metric_card('Total tasks', metrics.total, url_for('tasks.list')) }}
+      {{ metric_card('Completed', metrics.completed, url_for('tasks.list', status='completed')) }}
+
+  `label` is the human wording of the metric -- "Total tasks", "Completed", "Pending",
+  "In progress" -- and is rendered exactly as the caller gives it. A metric label and a
+  status label are different vocabularies, so this file never derives one from the
+  status enum: the caller names the card, and the task table names the statuses.
+
+  `value` is the count app/services/metrics.py reports for that metric. Every key of
+  that mapping is always present and an empty bucket is reported as 0, so a card with
+  nothing behind it reads 0 rather than rendering blank; the integer is printed as it
+  arrives, with no thousands separator, unit or percentage.
+
+  `href` is built by the caller with url_for from validated values and never taken from
+  the request, so this file composes no URL and touches neither `request` nor any
+  blueprint state. It is emitted inside the attribute with autoescaping left on, so an
+  `&` in a query string serialises as `&amp;` and the markup stays valid.
+
+  `metric` is the only class in the output: app/static/css/app.css styles the card and
+  the <strong> and <span> inside it, so the number and the label need no class of their
+  own and none is invented here. The anchor is the leaf element, its accessible name the
+  number followed by the label ("12 Total tasks"), and nothing else belongs inside it.
+#}
+
+{%- macro metric_card(label, value, href) -%}
+<a class="metric" href="{{ href }}"><strong>{{ value }}</strong><span>{{ label }}</span></a>
+{%- endmacro %}
