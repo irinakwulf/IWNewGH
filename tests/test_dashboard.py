@@ -25,7 +25,10 @@ two empty states. Everything else in the markup may change freely.
 
 The dashboard's failure path is asserted here too: a raise from the service the
 view calls answers with the 500 page, so the delivery of "the error pages" is a
-check rather than a reading of the template.
+check rather than a reading of the template. Beside it sits the contention case
+the connection's WAL setting and busy timeout exist for: a read taken while a
+second connection holds the database's write lock answers its four cards rather
+than that page.
 
 The module talks to Flask's test client, through the ``seeded_client``, ``client``
 and ``app`` fixtures of ``tests/conftest.py``, and the reads of the database it
@@ -681,6 +684,52 @@ def test_dashboard_metrics_joins_a_transaction_that_is_already_open(app, db_path
             connection.rollback()
 
     assert counts == expected
+
+
+# --------------------------------------------------------------------------
+# A concurrent writer: the dashboard reads through a write lock another
+# connection is holding, rather than waiting for it and failing on it.
+# --------------------------------------------------------------------------
+
+
+def test_dashboard_reads_through_a_write_lock_held_by_another_connection(
+    seeded_client, db_path
+):
+    """A writer holding the database's write lock cannot turn the dashboard into a 500.
+
+    A writer's transaction locks the file for every other connection in the
+    rollback-journal mode SQLite keeps by default, so a read taken while one runs
+    waits for it and then fails once the busy timeout is spent, which is the
+    dashboard answering its failure page instead of its cards whenever a seed run
+    or another tool holds the file. The connection opens the database in WAL mode,
+    where a reader works from the last committed snapshot while a writer holds the
+    lock, so the four cards report the rows the seed committed.
+
+    The lock is taken the way an outside process takes it -- a second connection to
+    the same file, its transaction opened here and rolled back in ``finally`` -- and
+    the read is made inside it. No elapsed time is asserted: a read that had to wait
+    out the writer would be slow as well as wrong, but the clock describes the host
+    rather than the product, so what is checked is the status, the cards and the
+    absence of the failure page that a locked database produces.
+    """
+    expected = expected_counts()
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("BEGIN EXCLUSIVE")
+        # ``read_dashboard`` asserts the 200 and reads the four cards out of the
+        # page, so the counts below are the dashboard's own report of the rows.
+        body, cards = read_dashboard(seeded_client)
+        assert counts_from(cards) == expected
+        assert UNEXPECTED_FAILURE_HEADING not in body
+    finally:
+        writer.rollback()
+        writer.close()
+
+    # Released: the dashboard still reports the same cards, so the read above left
+    # neither the application's connection nor the file in a state that broke the
+    # next request.
+    _, after_cards = read_dashboard(seeded_client)
+    assert counts_from(after_cards) == expected
 
 
 # --------------------------------------------------------------------------

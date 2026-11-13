@@ -9,7 +9,7 @@ command and the test fixtures both call it outside a request.
 The connection is per request, not per call: :func:`get_db` caches it on
 ``flask.g`` and :func:`close_db` closes it when Flask tears the application
 context down, so a page that reads a task, its comments and its assignee uses one
-handle. Two settings are applied when the handle is created, and both carry
+handle. Three settings are applied when the handle is created, and all three carry
 meaning:
 
 * ``row_factory = sqlite3.Row`` lets every service read a column by name instead
@@ -17,6 +17,12 @@ meaning:
 * ``PRAGMA foreign_keys = ON`` is the only way SQLite enforces the ``REFERENCES``
   clauses and the ``ON DELETE CASCADE`` the schema declares; SQLite leaves the
   pragma off by default, so without it those clauses would be documentation.
+* ``timeout=BUSY_TIMEOUT_SECONDS`` together with ``PRAGMA journal_mode = WAL`` is
+  the contention pair: WAL lets a reader work from the last committed snapshot
+  while another connection holds the write lock -- the dashboard's aggregate read
+  is exactly that -- and the timeout is how long a statement waits for a lock it
+  cannot avoid, such as a seed run or another tool holding the file, before it
+  reports the database as locked.
 
 :func:`init_db` and :func:`ensure_schema` reach the database through
 ``current_app`` and an application context rather than through request globals,
@@ -37,6 +43,7 @@ if TYPE_CHECKING:  # pragma: no cover - import for the annotation only
     from flask import Flask
 
 __all__ = [
+    "BUSY_TIMEOUT_SECONDS",
     "SCHEMA_FILENAME",
     "close_db",
     "ensure_schema",
@@ -45,6 +52,13 @@ __all__ = [
     "init_db",
     "unusable_database_error",
 ]
+
+# How long a statement waits for a lock another connection holds before SQLite
+# reports the database as locked. sqlite3's own default is five seconds, which a
+# writer's transaction -- a seed run, or another tool with the file open -- can
+# outlast, and a read that gives up on it fails the whole page; this absorbs such a
+# writer while still bounding how long a request may wait.
+BUSY_TIMEOUT_SECONDS = 30.0
 
 # The DDL lives beside this module, inside the package, and is read through
 # ``current_app.open_resource`` so it resolves from the installed package rather
@@ -80,16 +94,26 @@ def get_db() -> sqlite3.Connection:
 
     Returns:
         The ``sqlite3.Connection`` for ``current_app.config["DATABASE"]``, with
-        its row factory set to :class:`sqlite3.Row` and foreign-key enforcement
-        switched on. The configured path is absolute by the time the application
-        factory finishes, so it is used exactly as configured.
+        its row factory set to :class:`sqlite3.Row`, foreign-key enforcement
+        switched on, the file in WAL mode and a busy timeout of
+        :data:`BUSY_TIMEOUT_SECONDS` on every statement that needs a lock. The
+        configured path is absolute by the time the application factory finishes,
+        so it is used exactly as configured.
     """
     connection: sqlite3.Connection | None = getattr(g, _DB_KEY, None)
     if connection is None:
-        connection = sqlite3.connect(current_app.config["DATABASE"])
+        # The connect timeout is SQLite's busy handler, so the value has one home:
+        # there is no ``PRAGMA busy_timeout`` in addition to this argument.
+        connection = sqlite3.connect(
+            current_app.config["DATABASE"], timeout=BUSY_TIMEOUT_SECONDS
+        )
         connection.row_factory = sqlite3.Row
         # Per connection, not stored in the file: SQLite defaults it off.
         connection.execute("PRAGMA foreign_keys = ON")
+        # Stored in the file, so this is a cheap no-op on every connection after the
+        # first: with WAL a reader works from the last committed snapshot while a
+        # writer holds the write lock, instead of waiting for the writer to finish.
+        connection.execute("PRAGMA journal_mode = WAL")
         setattr(g, _DB_KEY, connection)
     return connection
 
