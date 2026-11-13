@@ -1,0 +1,102 @@
+{#
+  The dashboard, served at `GET /`: the four task counts, the create control, and
+  the project details.
+
+  app/blueprints/dashboard.py renders this file with exactly two context
+  variables and computes nothing else:
+
+    metrics  the mapping app/services/metrics.dashboard_metrics returns, with the
+             keys "total", "completed", "pending" and "in_progress". All four are
+             always present and an empty bucket is reported as 0, so every card
+             renders a number. The arithmetic belongs to that service: nothing
+             here sums, subtracts or derives one figure from another, and no
+             figure is written into this file as a literal.
+    project  the stored app.models.Project, or None while no project details have
+             been recorded yet.
+
+  Three areas, top to bottom: the metric grid, the task area and the project
+  panel. Each card is one link into the task list, so every number is one click
+  away from the rows behind it -- Total opens the unfiltered list and the three
+  status cards pass the database enum values ("completed", "pending",
+  "in_progress") that app/validation.parse_task_filters accepts. The task table,
+  its filter bar and its per-row controls all live on /tasks and are deliberately
+  not repeated here.
+
+  Each area answers an empty database in its own words, and the two empty states
+  are independent: the task area offers the first task, the project panel offers
+  the project form, and an empty board shows both rather than letting one displace
+  the other. Exactly one create control renders at a time -- the task area's own
+  button when tasks exist, or the empty state's button when none do, never both.
+
+  The dashboard's single primary action is that create control, so "Edit project
+  details" is always a secondary button in both project states. The headings form a
+  complete outline: the page's only level-one heading is here (base.html
+  deliberately carries none), each area names itself with a level-two heading, and
+  an empty state uses a level-three heading beneath its area's heading.
+
+  Every class used here -- .stack, .grid, .empty-state, and .button with its
+  --primary and --secondary variants -- is defined in app/static/css/app.css, and
+  the metric card styles itself inside partials/_metric_card.html. There is no
+  inline style, no second stylesheet and no script element: the application ships
+  no JavaScript.
+
+  Dates are rendered through the format_date filter of app/templating.py, which is
+  the single home for that formatting, so the dates here read exactly as they do
+  on the project page. Nothing on this page is marked safe: the project name and
+  description are user-entered text and render escaped, as every value in a
+  ".html" template does.
+#}
+{% extends "base.html" %}
+
+{% block title %}Dashboard · Taskboard{% endblock %}
+
+{% block content %}
+{% from "partials/_metric_card.html" import metric_card %}
+<h1>Dashboard</h1>
+<div class="stack">
+  <div class="grid">
+    {{ metric_card('Total tasks', metrics.total, url_for('tasks.list')) }}
+    {{ metric_card('Completed', metrics.completed, url_for('tasks.list', status='completed')) }}
+    {{ metric_card('Pending', metrics.pending, url_for('tasks.list', status='pending')) }}
+    {{ metric_card('In progress', metrics.in_progress, url_for('tasks.list', status='in_progress')) }}
+  </div>
+  <section class="stack">
+    <h2>Tasks</h2>
+    {% if metrics.total %}
+    <div>
+      <a class="button button--primary" href="{{ url_for('tasks.create') }}">Create task</a>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <h3>No tasks yet.</h3>
+      <p>Create a task to start tracking work, or load the sample data by running <code>flask --app app seed-db</code>.</p>
+      <a class="button button--primary" href="{{ url_for('tasks.create') }}">Create the first task</a>
+    </div>
+    {% endif %}
+  </section>
+  <section class="stack">
+    <h2>Project</h2>
+    {% if project %}
+    <dl>
+      <dt>Name</dt>
+      <dd>{{ project.name }}</dd>
+      <dt>Description</dt>
+      <dd>{{ project.description }}</dd>
+      <dt>Start date</dt>
+      <dd>{{ project.start_date|format_date }}</dd>
+      <dt>End date</dt>
+      <dd>{{ project.end_date|format_date }}</dd>
+    </dl>
+    <div>
+      <a class="button button--secondary" href="{{ url_for('project.view') }}">Edit project details</a>
+    </div>
+    {% else %}
+    <div class="empty-state">
+      <h3>No project details yet.</h3>
+      <p>The project name, description, start date and end date can be recorded at <code>/project</code>.</p>
+      <a class="button button--secondary" href="{{ url_for('project.view') }}">Edit project details</a>
+    </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
