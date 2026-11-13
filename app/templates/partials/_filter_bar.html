@@ -1,0 +1,68 @@
+{#
+  The task list's filter bar: three filters and their two controls.
+
+  Included by app/templates/tasks/list.html and by nothing else. It is included
+  rather than extended because it emits one GET form and no surrounding page: the
+  view keeps its own heading, toolbar and result line around it.
+
+  Two context variables come from that view (app/blueprints/tasks.py::task_list):
+
+    filters  the values app.validation.parse_task_filters produced -- "status",
+             "assignee" and "deadline", each None when that filter is not
+             applied. It is a mapping, and Jinja reads keys through attribute
+             access, which is why the three selects read filters.<name>. Every
+             access is guarded, so a render that arrives without it still fills
+             all three selects with "All" instead of raising.
+    members  app.services.members.list_members, already ordered by name, so the
+             Assignee options are rendered in the order given and never sorted
+             here.
+
+  The "Apply filters" button is the only thing that submits the form: no select
+  submits itself when its value changes, and the application ships no script at
+  all, so nothing on the page moves until that button is pressed and the filter
+  stays operable from the keyboard.
+
+  Every option value below is one app.validation.parse_task_filters accepts, and
+  the empty value is the "All" option it reads as "not applied". A non-empty
+  value outside those sets is answered with HTTP 400, so this form must never be
+  able to produce one.
+#}
+<form class="filters" method="get" action="{{ url_for('tasks.list') }}">
+  <div>
+    <label for="filter-status">Status</label>
+    <select class="select" id="filter-status" name="status">
+      <option value=""{% if not filters or filters.status is none or filters.status is not defined %} selected{% endif %}>All</option>
+      {# The three members of TASK_STATUSES in app/models.py, in the same order as
+         the schema's CHECK constraint. The values are mirrored literally because a
+         template cannot import that tuple; the labels are not repeated, they come
+         from the status_label filter so STATUS_LABELS stays the single source. #}
+      {% for option in ["pending", "in_progress", "completed"] %}
+      <option value="{{ option }}"{% if filters and filters.status == option %} selected{% endif %}>{{ option|status_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="filter-assignee">Assignee</label>
+    <select class="select" id="filter-assignee" name="assignee">
+      <option value=""{% if not filters or filters.assignee is none or filters.assignee is not defined %} selected{% endif %}>All</option>
+      <option value="unassigned"{% if filters and filters.assignee is not none and filters.assignee|string == "unassigned" %} selected{% endif %}>Unassigned</option>
+      {% for member in members %}
+      <option value="{{ member.id }}"{% if filters and filters.assignee is not none and filters.assignee|string == member.id|string %} selected{% endif %}>{{ member.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div>
+    <label for="filter-deadline">Deadline</label>
+    <select class="select" id="filter-deadline" name="deadline">
+      <option value=""{% if not filters or filters.deadline is none or filters.deadline is not defined %} selected{% endif %}>All</option>
+      <option value="overdue"{% if filters and filters.deadline == "overdue" %} selected{% endif %}>Overdue</option>
+      <option value="today"{% if filters and filters.deadline == "today" %} selected{% endif %}>Due today</option>
+      <option value="week"{% if filters and filters.deadline == "week" %} selected{% endif %}>Due this week</option>
+      <option value="none"{% if filters and filters.deadline == "none" %} selected{% endif %}>No deadline</option>
+    </select>
+  </div>
+  <div>
+    <button type="submit" class="button button--primary">Apply filters</button>
+    <a class="button button--secondary" href="{{ url_for('tasks.list') }}">Clear filters</a>
+  </div>
+</form>
