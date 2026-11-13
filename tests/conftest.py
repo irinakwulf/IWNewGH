@@ -39,8 +39,11 @@ TEST_SECRET_KEY = "test-secret-key"
 # follows the process locale while the interface, and the month table in
 # ``app.templating``, are English only: a host whose ``LC_TIME`` names months
 # differently would otherwise fail a correct render.
-# Test modules import these names; ``tests/test_dashboard.py`` alone copies them
-# because this file imports Flask, and points back here -- no module restates it.
+# Test modules import these names; ``tests/test_dashboard.py`` alone copies them,
+# because it imports no Flask module and so cannot import this one, and that copy
+# is the only other place in the suite the twelve names appear. Some of the test
+# helpers that format an expected date repeat the reason above; none of them sets
+# a month policy of its own, so a change starts with this tuple and that copy.
 MONTH_ABBREVIATIONS: tuple[str, ...] = (
     "Jan",
     "Feb",
