@@ -126,7 +126,9 @@ _SET_TASK_ASSIGNEE = (
 )
 
 
-def list_tasks(filters: Mapping[str, Any] | None = None) -> list[Task]:
+def list_tasks(
+    filters: Mapping[str, Any] | None = None, today: date | None = None
+) -> list[Task]:
     """Return the tasks matching the validated filters, ordered by id.
 
     The three filters combine with ``AND``, and a filter whose value is ``None``
@@ -141,6 +143,11 @@ def list_tasks(filters: Mapping[str, Any] | None = None) -> list[Task]:
             ``assignee`` (a member id, the string ``"unassigned"``, or ``None``)
             and ``deadline`` (``"overdue"``, ``"today"``, ``"week"``, ``"none"``
             or ``None``). Values are bound as parameters and never interpolated.
+        today: The single day the deadline buckets are measured from. A request
+            passes the day the deadline indicator also uses, so the bucket a row
+            is selected by and the word beside its deadline cannot describe
+            different days. ``None`` means one reading of the current day, which
+            is what a caller outside a request -- a script or a unit test -- gets.
 
     Returns:
         One :class:`app.models.Task` per match, each carrying its assignee's name
@@ -156,10 +163,14 @@ def list_tasks(filters: Mapping[str, Any] | None = None) -> list[Task]:
             :func:`app.validation.parse_task_filters`, which answers HTTP 400 for
             such a value before the list is built.
     """
-    # Read once, here: the overdue, today and week buckets must all measure from
-    # the same instant, and a second call inside the clauses could straddle
-    # midnight and put one task in two different buckets.
-    today = date.today()
+    # Read once, here, and only when the caller supplied no day: the overdue, today
+    # and week buckets must all measure from the same instant, and a second call
+    # inside the clauses could straddle midnight and put one task in two different
+    # buckets. A request passes the day it reads once, which is the value the
+    # deadline indicator is rendered against, so the filter and the rendered word
+    # cannot disagree.
+    if today is None:
+        today = date.today()
 
     # An absent mapping and a mapping whose values are all None describe the same
     # request -- the unfiltered list -- so one empty mapping serves both.

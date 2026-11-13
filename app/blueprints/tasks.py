@@ -74,6 +74,7 @@ from flask import (
 from app.models import STATUS_LABELS, Task
 from app.services import comments, members, metrics, projects
 from app.services import tasks as task_service
+from app.templating import reference_day
 from app.validation import (
     DEFAULT_STATUS,
     is_valid_status,
@@ -319,6 +320,9 @@ def task_list():
     than a field to correct, so it is answered with the 400 page naming the
     parameter instead of a list that silently ignores it.
 
+    The request's single reference day is read here and handed to the filter, so the
+    deadline buckets and the per-row deadline indicator are measured from one day.
+
     Returns:
         The rendered task list with the default 200 status, or the 400 page naming
         every filter parameter the parser rejected.
@@ -327,9 +331,14 @@ def task_list():
     if errors:
         _bad_request(errors)
 
+    # One reading of today for the whole render: the per-row deadline indicator reads
+    # the same cached day, which is why a row this filter selects as due today cannot
+    # be labelled "Overdue" by its own indicator.
+    today = reference_day()
+
     return render_template(
         "tasks/list.html",
-        tasks=task_service.list_tasks(filters),
+        tasks=task_service.list_tasks(filters, today=today),
         members=members.list_members(),
         filters=filters,
         total_count=metrics.total_task_count(),

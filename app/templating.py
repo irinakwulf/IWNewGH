@@ -37,6 +37,7 @@ __all__ = [
     "format_deadline",
     "format_datetime",
     "init_app",
+    "reference_day",
     "status_label",
 ]
 
@@ -126,13 +127,18 @@ def _parse_datetime(value: object) -> datetime.datetime | None:
         return None
 
 
-def _reference_day() -> datetime.date:
+def reference_day() -> datetime.date:
     """Return the single day this request measures every deadline against.
 
     The interface measures every deadline on a page against one reference day, so the
     state and the day count of a rendered indicator always describe the same day, and a
     page rendered across midnight cannot label two rows of one list against different
     days.
+
+    This is also the day :func:`app.services.tasks.list_tasks` measures its deadline
+    buckets from: a request reads it here, passes it to the filter and lets the
+    indicator read the same cached value, so the bucket a row is selected by and the
+    word beside its deadline are decided against one day.
 
     Inside a request the day is read on first use and cached on ``flask.g`` for the
     rest of it; outside a request, as in a unit test calling :func:`deadline_state`
@@ -218,7 +224,7 @@ def deadline_state(deadline: str | None, status: str = "pending") -> str:
         return ""
     # The request's one reference day, so every row of a page is measured against the
     # same day and the state always agrees with the day count beside it.
-    today = _reference_day()
+    today = reference_day()
     if due < today:
         return "overdue"
     if due == today:
@@ -261,7 +267,7 @@ def format_deadline(deadline: str | None, status: str = "pending") -> str:
         # "soon" means the deadline is ahead of today and inside the window, so the
         # count runs from 1 to SOON_WINDOW_DAYS. The plural stands at one day because
         # "Due in N days" is the wording the interface states.
-        days = (due - _reference_day()).days
+        days = (due - reference_day()).days
         word = f"Due in {days} days"
     else:
         return date_text

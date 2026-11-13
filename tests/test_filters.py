@@ -29,9 +29,14 @@ cases assert the parameter's own message, the absence of the messages belonging 
 parameters that were fine, and the absence of a rendered list -- a page that returned
 400 while showing every task anyway would pass a status-code-only check.
 
-What is deliberately not asserted: that any select submits itself when its value
-changes (the application ships no script, so there is nothing to test), the exact
-shape of the page, and any literal count, member id or calendar date.
+What the filter cases deliberately do not assert: that any select submits itself when
+its value changes (the application ships no script, so there is nothing to test), the
+exact shape of the page, and any literal count, member id or calendar date drawn from
+the dataset -- no filter expectation holds one, because every such value is derived
+from :data:`seed.SAMPLE_DATA` or from the seeded rows. The direct cases for the four
+Jinja filters, at the end of this module, are the one deliberate exception: they pin the
+exact text each input renders as, because they assert a format rather than a dataset
+figure.
 
 This module also carries the direct unit cases for the four Jinja filters in
 :mod:`app.templating` -- ``format_date``, ``format_datetime``, ``status_label`` and
@@ -120,6 +125,14 @@ _CLEAR_CONTROL = re.compile(
 # link or status form action -- links to ``/tasks/<digits>`` and stops there, so this
 # pattern counts rows and nothing else.
 _ROW_LINK = re.compile(r'<a href="/tasks/(?P<task_id>\d+)">(?P<title>[^<]*)</a>')
+
+# One rendered deadline indicator: the ``.deadline`` span the table emits inside a
+# row's deadline cell. The filter bar's own "Overdue" and "Due today" option labels are
+# bare text inside ``<option>`` elements and carry no such span, so this reads the
+# indicators the rows show and nothing the controls say.
+_DEADLINE_CELL = re.compile(
+    r'<span class="deadline[^"]*">(?P<text>.*?)</span>', re.DOTALL
+)
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +388,27 @@ def rendered_rows(html: str) -> list[tuple[str, str]]:
 def rendered_titles(html: str) -> set[str]:
     """Return the titles of the task rows the list rendered."""
     return {title for _, title in rendered_rows(html)}
+
+
+def rendered_deadline_cells(html: str) -> list[str]:
+    """Return the text of every deadline indicator the task rows rendered.
+
+    The words "Overdue" and "Due today" are also the filter bar's own option labels, so
+    a page-wide search for them would answer for the controls rather than for the rows.
+    Reading the ``.deadline`` span each row carries keeps the check about what the
+    deadline column says, and the text is unescaped and stripped so it compares with the
+    indicator's own words.
+
+    Args:
+        html: The rendered task list.
+
+    Returns:
+        One string per rendered position of a deadline cell, in row order.
+    """
+    return [
+        unescape(match.group("text")).strip()
+        for match in _DEADLINE_CELL.finditer(html)
+    ]
 
 
 def selected_filter_values(html: str, name: str) -> set[str]:
@@ -659,6 +693,71 @@ def test_overdue_excludes_finished_work(app: Flask, seeded_client: FlaskClient) 
 
     html = _assert_filtered_list(seeded_client, {"deadline": "overdue"}, overdue)
     assert completed_past_due.isdisjoint(rendered_titles(html))
+
+
+def test_the_deadline_filter_and_the_indicator_measure_one_reference_day(
+    app: Flask, seeded_client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bucket a row is selected by and the word beside its deadline share one day.
+
+    The interface states that ``today`` is evaluated once per request, so the day the
+    deadline filter selects its rows with is the day the deadline indicator beside each
+    row is measured against: a request served across midnight cannot select a row as due
+    today and then label it "Overdue". The patched clock hands its first reader the
+    current day and every later reader the day after, and it records each reading, so a
+    second reading taken anywhere in the request -- by the filter or by the indicator --
+    shows up either as a second recorded read or as a row whose word contradicts the
+    bucket that selected it.
+    """
+    reads: list[date] = []
+
+    class SteppingDate(date):
+        """A ``date`` whose ``today`` steps one day on after its first reading."""
+
+        @classmethod
+        def today(cls) -> date:
+            """Return today on the first reading and the day after on any later one."""
+            reads.append(date.today())
+            if len(reads) == 1:
+                return reads[-1]
+            return reads[-1] + timedelta(days=1)
+
+    class Clock:
+        """The parts of the ``datetime`` module the deadline helper reads."""
+
+        date = SteppingDate
+        datetime = datetime
+        timedelta = timedelta
+
+    monkeypatch.setattr(templating, "datetime", Clock)
+    # The filter's own reading is patched with the same stepping date. The reading this
+    # case rules out is the filter taking one of its own, so a second reading has to be
+    # both visible and one day ahead whichever of the two readers takes it.
+    monkeypatch.setattr(task_service, "date", SteppingDate)
+
+    html = _get_list(seeded_client, {"deadline": "today"})
+
+    assert len(reads) == 1, (
+        "the request read today more than once, so its deadline filter and its "
+        "deadline indicator can be measured from different days"
+    )
+    measured_from = reads[0]
+    expected = {
+        row["title"]
+        for row in stored_tasks(app)
+        if _in_deadline_bucket(row, "today", measured_from)
+    }
+    assert expected, "the seeded dataset holds no task due today"
+
+    assert rendered_titles(html) == expected, "the filtered list rendered other rows"
+    total = len(sample_tasks())
+    assert f"<p>{expected_result_line(len(expected), total, filtered=True)}</p>" in html
+
+    cells = rendered_deadline_cells(html)
+    assert len(cells) == len(expected), "one deadline cell per matching row"
+    for text in cells:
+        assert text.endswith("Due today"), f"a due-today row reads {text!r}"
+        assert "Overdue" not in text, f"a due-today row reads {text!r}"
 
 
 def test_the_filter_vocabularies_are_the_documented_ones() -> None:
