@@ -57,6 +57,13 @@ TASKS_URL = "/tasks"
 # task is never "due this week" in one place and "due soon" in another.
 THIS_WEEK_END_OFFSET = 6
 
+# The three statuses the status filter offers, in the order the model, the schema's
+# CHECK constraint and the filter bar list them. Spelled out rather than taken from
+# app.models, for the same reason as DEADLINE_BUCKETS below: a status the parser
+# quietly stops accepting, or a fourth one the model grows, fails this suite instead
+# of following the module.
+STATUS_FILTERS = ("pending", "in_progress", "completed")
+
 # The four deadline buckets the filter bar offers, named as the filter names them.
 # Spelled out rather than taken from app.validation, so a bucket the parser quietly
 # stops accepting, or a fifth one it starts accepting, fails this suite instead of
@@ -88,6 +95,17 @@ _FILTER_FORM = re.compile(
 _OPTION = re.compile(r"<option(?P<attributes>[^>]*)>", re.DOTALL)
 _OPTION_VALUE = re.compile(r'value="(?P<value>[^"]*)"')
 _SELECTED = re.compile(r"\bselected\b")
+
+# The filter bar's two controls, each matched inside the form body: the submit button
+# that sends the three selects, and the link back to the unfiltered list. Both are
+# matched on their role and their target as well as their wording, because every case
+# below requests the filtered URL directly instead of pressing either one -- so a
+# button that lost its ``type``, or a Clear link pointing anywhere but the whole board,
+# would otherwise go unnoticed.
+_APPLY_CONTROL = re.compile(r'<button[^>]*\btype="submit"[^>]*>Apply filters</button>')
+_CLEAR_CONTROL = re.compile(
+    rf'<a[^>]*\bhref="{re.escape(TASKS_URL)}"[^>]*>Clear filters</a>'
+)
 
 # One rendered task row: the title anchor the table emits per row. No other markup on
 # the page -- not the navigation, not the toolbar's Create task link, not a row's Edit
@@ -314,6 +332,36 @@ def selected_filter_values(html: str, name: str) -> set[str]:
     return selected
 
 
+def assert_filter_controls(html: str) -> None:
+    """Assert the filter bar rendered both of the controls it exists to offer.
+
+    The bar's Apply button is the only thing that submits the three selects, and its
+    Clear link is the only route back to the whole board. Neither is proved by a page
+    rendering, and no case in this module presses either one -- each submits its query
+    string directly -- so without this check a bar whose Apply button was deleted, or
+    whose Clear link pointed somewhere else, would answer every case green while a
+    reviewer could no longer filter the list at all.
+
+    Args:
+        html: A rendered task list, filtered or not.
+
+    Raises:
+        AssertionError: If the page renders no filter form, or if the form body holds no
+            submit button reading "Apply filters", or no link reading "Clear filters"
+            whose ``href`` is the unfiltered list.
+    """
+    form = _FILTER_FORM.search(html)
+    assert form is not None, "the task list rendered no filter form"
+
+    body = form.group("body")
+    assert _APPLY_CONTROL.search(body), (
+        "the filter form has no submit button reading 'Apply filters'"
+    )
+    assert _CLEAR_CONTROL.search(body), (
+        f"the filter form has no 'Clear filters' link to {TASKS_URL}"
+    )
+
+
 def expected_result_line(matches: int, total: int, *, filtered: bool) -> str:
     """Return the sentence the list must show beside its table.
 
@@ -365,6 +413,7 @@ def _assert_filtered_list(
     assert rendered_titles(html) == expected, "the filtered list rendered other rows"
     assert len(rendered_rows(html)) == len(expected), "one row per matching task"
     assert f"<p>{expected_result_line(len(expected), total, filtered=True)}</p>" in html
+    assert_filter_controls(html)
 
     if expected:
         assert TABLE_CAPTION in html
@@ -387,19 +436,23 @@ def _assert_whole_list(client: FlaskClient, params: Mapping[str, str]) -> str:
     assert rendered_titles(html) == {task["title"] for task in sample_tasks()}
     assert len(rendered_rows(html)) == total
     assert f"<p>{expected_result_line(total, total, filtered=False)}</p>" in html
+    assert_filter_controls(html)
     for name in FILTER_KEYS:
         assert selected_filter_values(html, name) == {""}
     return html
 
 
 # The message each filter parameter is rejected with, keyed by the parameter name. The
-# message names the parameter itself, and the 400 page's description prefixes it with
-# the parameter again, so the two together are what "names the offending parameter"
-# means on the rendered page.
+# wording is pinned here rather than taken from app.validation -- the module under test
+# -- so a reworded filter message fails in this module too, where the rendered 400 page
+# is read; tests/test_validation.py pins the same three sentences for its own
+# assertions. Each message names its parameter, and the 400 page's description prefixes
+# it with the parameter again, so the two together are what "names the offending
+# parameter" means on the rendered page.
 FILTER_MESSAGES: dict[str, str] = {
-    "status": validation.MSG_INVALID_FILTER_STATUS,
-    "assignee": validation.MSG_INVALID_FILTER_ASSIGNEE,
-    "deadline": validation.MSG_INVALID_FILTER_DEADLINE,
+    "status": "Invalid value for filter 'status'.",
+    "assignee": "Invalid value for filter 'assignee'.",
+    "deadline": "Invalid value for filter 'deadline'.",
 }
 
 
@@ -504,12 +557,13 @@ def test_overdue_excludes_finished_work(seeded_client: FlaskClient) -> None:
     """Work that is finished is not late, so the overdue bucket leaves it out.
 
     The dataset holds completed tasks whose deadline has passed, so this is asserted
-    about real rows; a run against a dataset without one skips rather than passing on
-    an empty set.
+    about real rows; a run against a dataset without one fails here rather than passing
+    on an empty set.
     """
     completed_past_due = titles_completed_and_past_due()
-    if not completed_past_due:
-        pytest.skip("SAMPLE_DATA holds no completed task whose deadline has passed")
+    assert completed_past_due, (
+        "SAMPLE_DATA holds no completed task whose deadline has passed"
+    )
 
     overdue = titles_in_deadline_bucket("overdue")
     assert overdue.isdisjoint(completed_past_due)
@@ -519,10 +573,16 @@ def test_overdue_excludes_finished_work(seeded_client: FlaskClient) -> None:
 
 
 def test_the_filter_vocabularies_are_the_documented_ones() -> None:
-    """The values these filters accept are the closed sets the product defines."""
-    assert validation.STATUS_FILTERS == models.TASK_STATUSES
+    """The values these filters accept are the closed sets the product defines.
+
+    Each set is compared with a literal spelled out in this module -- the model's
+    statuses and the parser's filter vocabularies would otherwise only be compared
+    with one another, which the parser's own assignment makes true by construction.
+    """
+    assert models.TASK_STATUSES == STATUS_FILTERS
+    assert validation.STATUS_FILTERS == STATUS_FILTERS
     assert validation.DEADLINE_FILTERS == DEADLINE_BUCKETS
-    assert validation.ASSIGNEE_UNASSIGNED == ASSIGNEE_UNASSIGNED
+    assert validation.ASSIGNEE_UNASSIGNED == "unassigned"
 
 
 def test_the_seeded_dataset_makes_every_case_meaningful() -> None:
