@@ -69,6 +69,11 @@ COMMENT_BODY_LIMIT = 1000
 # exactly as it was typed.
 SURVIVING_BODY = "The hero spacing still needs one more pass."
 
+# An id one past the largest a SQLite INTEGER column can store. Werkzeug's ``<int:>``
+# converter accepts any run of digits, so the comment route can be handed a value no
+# row id could ever hold.
+SQLITE_INTEGER_OVERFLOW = 2**63
+
 
 # ---------------------------------------------------------------------------
 # Reading the seeded database. Each helper opens its own application context, so a
@@ -515,6 +520,30 @@ def test_a_comment_on_an_unknown_task_is_a_404(
     inserted a row whose parent it never checked.
     """
     task_id = missing_id(app, "task")
+    author = first_member(app)
+    count_before = comment_count(app)
+
+    response = seeded_client.post(
+        f"/tasks/{task_id}/comments",
+        data={"author_id": str(author.id), "body": "A comment on nothing."},
+    )
+
+    assert response.status_code == 404
+    assert BACK_TO_DASHBOARD_TEXT in response.get_data(as_text=True)
+    assert comment_count(app) == count_before
+
+
+def test_a_comment_on_an_id_beyond_the_integer_range_is_a_404(
+    seeded_client: FlaskClient, app: Flask
+) -> None:
+    """An id SQLite cannot store is an unknown task, not a server error.
+
+    The route reads the task before it parses the body, so the value reaches that
+    read: an id above SQLite's signed 64-bit integer has to take the same 404 path
+    an unknown id takes, because binding it would raise instead. The count assertion
+    is what shows nothing was written for it.
+    """
+    task_id = SQLITE_INTEGER_OVERFLOW
     author = first_member(app)
     count_before = comment_count(app)
 

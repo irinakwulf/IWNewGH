@@ -31,6 +31,7 @@ task, is a parameterized query over the ``db_path`` fixture.
 
 from __future__ import annotations
 
+import contextlib
 import html
 import re
 import sqlite3
@@ -63,6 +64,12 @@ CARD_CONTRACT: dict[str, tuple[str, str | None]] = {
 # cards append their query to.
 TASK_LIST_PATH = "/tasks"
 
+# The create form the dashboard's create control opens. Written down rather than
+# derived from the application, because this module imports no Flask and opens no
+# application context: the control is contracted to be a link to this path, so
+# plain text or a link pointing anywhere else is not the control.
+TASK_CREATE_PATH = "/tasks/new"
+
 # The task area's two states and its seed hint, and the project panel's own empty
 # state. The two empty states are independent, so both are named: an empty task
 # area must never displace the project details, and vice versa.
@@ -71,6 +78,27 @@ EMPTY_TASK_AREA_HEADING = "No tasks yet."
 EMPTY_TASK_AREA_ACTION = "Create the first task"
 SEED_COMMAND_HINT = "flask --app app seed-db"
 EMPTY_PROJECT_HEADING = "No project details yet."
+
+# The project panel's dates read as ``D Mon YYYY`` -- "26 Oct 2026" -- so the day
+# is not zero-padded and the month is one of these twelve three-letter English
+# names, indexed by ``date.month - 1``. Spelled out rather than taken from
+# ``strftime("%b")``, which follows the process locale: the interface ships in
+# English only, so a correct render must not move with the host's ``LC_TIME`` and
+# neither may the expectation derived from it.
+MONTHS: tuple[str, ...] = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
 
 # The heading the 500 page renders. A dashboard that failed would answer with that
 # page rather than with four cards, so its absence is asserted wherever a
@@ -86,6 +114,10 @@ _METRIC_CARD = re.compile(r'<a\b[^>]*class="[^"]*\bmetric\b[^"]*"[^>]*>.*?</a>',
 _ANCHOR_HREF = re.compile(r'href="([^"]*)"')
 _MARKUP_TAG = re.compile(r"<[^>]+>")
 _LEADING_COUNT = re.compile(r"\s*(?P<count>\d+)(?P<label>.*)", re.S)
+
+# Any anchor on a page, so a control is found by its wording and checked by its
+# target together rather than as two unrelated substrings of the document.
+_ANCHOR = re.compile(r"<a\b[^>]*>.*?</a>", re.S)
 
 # What the create form's post redirects to: the new task's own page.
 _TASK_DETAIL_LOCATION = re.compile(r"/tasks/\d+")
@@ -127,6 +159,34 @@ def metric_cards(body: str) -> dict[str, tuple[int, str]]:
             html.unescape(href.group(1)) if href is not None else "",
         )
     return cards
+
+
+def anchor_hrefs(body: str, control: str) -> list[str]:
+    """Return the target of every anchor in ``body`` whose text is ``control``.
+
+    A control that is contracted to be a link is read as the pair it is -- its
+    wording and the page it opens -- rather than as a substring of the document: a
+    page that printed the words as plain text, or linked them somewhere else, holds
+    no anchor here at all. The anchor's text is its tag-stripped content with the
+    surrounding whitespace removed, so the template may wrap or indent it freely.
+
+    Args:
+        body: A page's HTML.
+        control: The anchor text the control carries, such as "Create task".
+
+    Returns:
+        The matching anchors' hrefs, in document order, with HTML entities decoded
+        and an anchor that carries no href represented by an empty string. An empty
+        list means the control is not a link on that page.
+    """
+    hrefs: list[str] = []
+    for match in _ANCHOR.finditer(body):
+        anchor = match.group(0)
+        if _MARKUP_TAG.sub("", anchor).strip() != control:
+            continue
+        href = _ANCHOR_HREF.search(anchor)
+        hrefs.append(html.unescape(href.group(1)) if href is not None else "")
+    return hrefs
 
 
 def read_dashboard(client: Any) -> tuple[str, dict[str, tuple[int, str]]]:
@@ -201,10 +261,11 @@ def formatted_date(offset: int) -> str:
     The seed writes day offsets rather than calendar dates, and the project panel
     renders each stored date through the ``format_date`` filter, so the expectation
     is the same offset resolved against today and formatted the same way: no
-    zero-padding on the day and a three-letter English month.
+    zero-padding on the day, and the English month name spelled out in
+    :data:`MONTHS` rather than the one ``strftime`` would take from the locale.
     """
     day = date.today() + timedelta(days=offset)
-    return f"{day.day} {day.strftime('%b')} {day.year}"
+    return f"{day.day} {MONTHS[day.month - 1]} {day.year}"
 
 
 def first_seeded_title(status: str) -> str:
@@ -229,7 +290,7 @@ def seeded_task_id(db_path: str, title: str) -> int:
     Returns:
         The task's integer id.
     """
-    with sqlite3.connect(db_path) as connection:
+    with contextlib.closing(sqlite3.connect(db_path)) as connection:
         row = connection.execute(
             "SELECT id FROM task WHERE title = ?", (title,)
         ).fetchone()
@@ -239,7 +300,7 @@ def seeded_task_id(db_path: str, title: str) -> int:
 
 def count_task_rows(db_path: str) -> int:
     """Return how many rows the ``task`` table holds."""
-    with sqlite3.connect(db_path) as connection:
+    with contextlib.closing(sqlite3.connect(db_path)) as connection:
         row = connection.execute("SELECT COUNT(*) FROM task").fetchone()
     return int(row[0])
 
@@ -300,9 +361,15 @@ def test_seeded_total_is_the_sum_of_its_status_buckets(seeded_client):
 
 
 def test_seeded_dashboard_offers_the_create_control(seeded_client):
-    """With tasks present the task area offers the create control, not its empty state."""
+    """The task area offers the create control rather than its empty state.
+
+    Tasks exist, so the empty state's own heading and button are absent.
+    """
     body, _ = read_dashboard(seeded_client)
-    assert CREATE_TASK_CONTROL in body
+    # The control is a link into the create form, so plain text reading "Create
+    # task" or a link pointing anywhere else does not satisfy it, and there is
+    # exactly one of them.
+    assert anchor_hrefs(body, CREATE_TASK_CONTROL) == [TASK_CREATE_PATH]
     assert EMPTY_TASK_AREA_HEADING not in body
     assert EMPTY_TASK_AREA_ACTION not in body
 
@@ -392,6 +459,84 @@ def test_empty_dashboard_shows_both_empty_states(client):
     assert EMPTY_PROJECT_HEADING in body
     # The empty state takes the create control's place rather than sitting beside
     # it, so exactly one way to create the first task is on screen.
+    assert CREATE_TASK_CONTROL not in body
+
+
+# --------------------------------------------------------------------------
+# The mixed states: one area holds rows while the other is empty. The two empty
+# states are independent, so neither may be suppressed by the other area having
+# something to show.
+# --------------------------------------------------------------------------
+
+# Where the project form lives. The second mixed state records the project row
+# through it, so the project panel has details of its own while no task exists.
+PROJECT_PATH = "/project"
+
+
+def post_project_details(client: Any) -> str:
+    """Record a project row through the project form and return the name it stores.
+
+    All four fields are submitted, because the project has no optional one. Both
+    dates are resolved against today rather than written down: a start date behind
+    today and an end date ahead of it satisfy the date-order rule whenever the test
+    runs. The name is unique per call and shares no wording with either empty
+    state, so finding it on the dashboard cannot be mistaken for a heading.
+
+    Args:
+        client: A Flask test client whose database holds no project row yet.
+
+    Returns:
+        The name the form was submitted with, as the dashboard renders it.
+    """
+    name = f"Dashboard project {uuid.uuid4().hex[:12]}"
+    response = client.post(
+        PROJECT_PATH,
+        data={
+            "name": name,
+            "description": "Recorded to give the project panel a row of its own.",
+            "start_date": (date.today() - timedelta(days=7)).isoformat(),
+            "end_date": (date.today() + timedelta(days=30)).isoformat(),
+        },
+    )
+    assert response.status_code == 302
+    return name
+
+
+def test_task_without_project_row_keeps_the_project_empty_state(client):
+    """Tasks present and no project row: the project panel still offers its form.
+
+    A task may be recorded before the project details are, and this is that state:
+    the task area shows its create control while the project panel shows its own
+    empty state, so the panel's empty state survives the board holding work.
+    """
+    post_new_task(client)
+
+    body, cards = read_dashboard(client)
+    # The premise rather than a dashboard claim: the create above succeeded, so the
+    # task area really is populated while no project row exists.
+    assert counts_from(cards)["total"] == 1
+    assert anchor_hrefs(body, CREATE_TASK_CONTROL) == [TASK_CREATE_PATH]
+    assert EMPTY_TASK_AREA_HEADING not in body
+    assert EMPTY_TASK_AREA_ACTION not in body
+    assert EMPTY_PROJECT_HEADING in body
+
+
+def test_project_without_tasks_keeps_the_task_area_empty_states(client):
+    """A project row present and no tasks: the task area still offers the first task.
+
+    The mirror of the case above. Both halves of the task area's empty state -- its
+    heading and its action -- must survive a stored project row, which a template
+    that gated them on the project existing would fail while every other case
+    stayed green.
+    """
+    name = post_project_details(client)
+
+    body, cards = read_dashboard(client)
+    assert set(counts_from(cards).values()) == {0}
+    assert EMPTY_TASK_AREA_HEADING in body
+    assert EMPTY_TASK_AREA_ACTION in body
+    assert html.escape(name, quote=False) in body
+    assert EMPTY_PROJECT_HEADING not in body
     assert CREATE_TASK_CONTROL not in body
 
 

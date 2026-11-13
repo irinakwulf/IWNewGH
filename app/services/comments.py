@@ -86,6 +86,13 @@ def add_comment(task_id: int, values: Mapping[str, Any]) -> Comment | None:
         carries the ``id`` and the ``created_at`` that SQLite's column default
         wrote, along with its joined ``author_name``. ``None`` when no task has
         ``task_id``, in which case nothing is written.
+
+    Raises:
+        RuntimeError: If the row cannot be read back after a successful insert,
+            which would mean it was removed mid-write. The row exists whenever the
+            insert above succeeded, so this only makes a broken invariant visible
+            instead of failing inside :meth:`app.models.Comment.from_row` with a
+            value that is not a row at all.
     """
     db = get_db()
     if db.execute(_TASK_EXISTS, (task_id,)).fetchone() is None:
@@ -99,4 +106,6 @@ def add_comment(task_id: int, values: Mapping[str, Any]) -> Comment | None:
     # The row was committed a line ago, so this read always finds it; reading it
     # back is what supplies the database-written timestamp and the author's name.
     row = db.execute(_SELECT_COMMENT, (cursor.lastrowid,)).fetchone()
+    if row is None:  # pragma: no cover - the insert above just created the row
+        raise RuntimeError("comment row missing after insert")
     return Comment.from_row(row)

@@ -23,6 +23,15 @@ filled. The join is a ``LEFT JOIN`` on purpose -- an unassigned task must stay i
 the list with ``assignee_name`` of ``None``, which the templates render as
 "Unassigned", instead of disappearing from it.
 
+That one projection serves the single-row reads as well -- :func:`get_task` and the
+re-read every mutation performs -- although only the task list displays the comment
+count. Splitting the count out of them was considered and rejected: a second,
+count-less projection would have to be kept in step with the first, and the same
+task would then read a ``comment_count`` of 0 through :func:`get_task` and 2 through
+:func:`list_tasks`, which is precisely the disagreement the shared shape prevents.
+What the count costs a single-row read is one index seek, served by the
+``comment(task_id)`` index, and that was weighed and accepted at this scale.
+
 Boundaries owned by other layers are deliberately absent. Parsing, trimming and
 the character bounds live in :mod:`app.validation`, which also parses the ISO-8601
 dates, so this module stores exactly the values it is handed and never re-parses a
@@ -57,9 +66,10 @@ __all__ = [
     "update_task",
 ]
 
-# The schema's own default for a task's status, repeated here because create_task
-# is the one place the row is written: a caller that omits the status still gets a
-# pending task rather than a NOT NULL failure.
+# The schema's own default for a task's status, applied in Python as well because it
+# is the value both write paths bind when a caller omits the status: an INSERT then
+# stores the pending task the column default would have given it, and an UPDATE
+# writes the same value over the stored one rather than leaving that status alone.
 _DEFAULT_STATUS = "pending"
 
 # Finished work is not late, so the overdue bucket excludes it. This is the same
@@ -76,9 +86,23 @@ _UNASSIGNED = "unassigned"
 # disagree about which work is imminent.
 _WEEK_WINDOW_DAYS = 6
 
+# The bounds of the signed 64-bit INTEGER a SQLite column stores, so no row id can
+# lie outside them. An id beyond them cannot be a task, and it must not reach a
+# bind: sqlite3 raises OverflowError for such a value rather than matching no row,
+# which would turn the route's 404 into a 500.
+_SQLITE_INTEGER_MIN = -(2**63)
+_SQLITE_INTEGER_MAX = 2**63 - 1
+
 # The projection and join every task read shares, so the list, the detail view and
 # the re-read after a write cannot disagree about which columns a Task needs. Only
 # constants are concatenated onto it; no submitted value ever is.
+#
+# The correlated count is deliberately part of this one projection rather than a
+# second, count-less one for the single-row reads: get_task and list_tasks must
+# return the same row shape, or the same task would read comment_count 0 through
+# get_task and 2 through list_tasks. The count is displayed only by the task list,
+# so what a single-row read pays for the shared shape is one index seek on
+# comment(task_id) -- a cost weighed and accepted at this scale.
 _TASK_SELECT = (
     "SELECT t.id, t.project_id, t.title, t.description, t.assignee_id, t.status,"
     " t.deadline, t.created_at, t.updated_at,"
@@ -136,6 +160,14 @@ def list_tasks(filters: Mapping[str, Any] | None = None) -> list[Task]:
         and its comment count, ordered by ``id`` so the rendered list and the
         result count line are stable. An empty list when nothing matches and when
         no task exists yet.
+
+    Raises:
+        ValueError: If ``filters`` carries a ``deadline`` value that is not one of
+            the four buckets. The chain fails closed rather than open, so an
+            unrecognised value can never leave the query unfiltered; the callers
+            reach this function only through
+            :func:`app.validation.parse_task_filters`, which answers HTTP 400 for
+            such a value before the list is built.
     """
     # Read once, here: the overdue, today and week buckets must all measure from
     # the same instant, and a second call inside the clauses could straddle
@@ -184,6 +216,14 @@ def list_tasks(filters: Mapping[str, Any] | None = None) -> list[Task]:
         )
     elif deadline == "none":
         clauses.append("t.deadline IS NULL")
+    elif deadline is not None:
+        # Both filter branches fail closed, and this one must raise rather than fall
+        # through: with no final branch an unrecognised bucket would append no
+        # clause at all, quietly widening this statement into the unfiltered
+        # full-table read. Nothing reachable over HTTP arrives here --
+        # app.validation.parse_task_filters answers 400 for a deadline outside the
+        # four buckets before the list is built.
+        raise ValueError(f"unknown deadline filter: {deadline!r}")
 
     # The only string assembly in this module: fixed clause fragments joined with
     # AND. Every value remains a bound parameter in the order it was appended.
@@ -201,13 +241,23 @@ def get_task(task_id: int) -> Task | None:
 
     Args:
         task_id: The task's primary key, already parsed to an ``int`` by the caller.
+            An id outside SQLite's signed 64-bit integer range is not a task: no row
+            can hold it, so it is answered without being bound to a statement.
 
     Returns:
         The matching :class:`app.models.Task`, carrying its ``assignee_name``
         (``None`` when unassigned) and its ``comment_count``, or ``None`` when no
-        task has that id. Returned as ``None`` rather than raised, because the
-        route is what decides whether an unknown id is a 404.
+        task has that id. An id outside SQLite's integer range returns ``None``
+        exactly like a missing row, which is what keeps the route on its 404 path
+        instead of letting an unrepresentable value reach the bind. Returned as
+        ``None`` rather than raised, because the route is what decides whether an
+        unknown id is a 404.
     """
+    # Refuse an id no SQLite INTEGER can hold before the statement is prepared: the
+    # bind would raise OverflowError, and an id that cannot be a row is simply not a
+    # task -- the same answer as a missing one.
+    if not _SQLITE_INTEGER_MIN <= task_id <= _SQLITE_INTEGER_MAX:
+        return None
     row = get_db().execute(_SELECT_TASK, (task_id,)).fetchone()
     if row is None:
         return None
@@ -267,9 +317,12 @@ def update_task(task_id: int, values: Mapping[str, Any]) -> Task | None:
         task_id: The task to update.
         values: The mapping :func:`app.validation.parse_task_form` returns for an
             accepted edit -- the same keys :func:`create_task` takes, describing
-            the task as it should now stand. A missing ``status`` keeps the
-            schema's default of ``pending`` and a missing ``description`` is stored
-            as empty, mirroring the column defaults.
+            the task as it should now stand. An omitted or empty ``status`` is
+            written as ``pending`` and overwrites whatever status the row holds:
+            SQLite applies a column ``DEFAULT`` on an ``INSERT`` only, never on an
+            ``UPDATE``, so leaving the value out of the statement would not leave
+            the stored status untouched. An omitted ``description`` is written as
+            empty for the same reason.
 
     Returns:
         The updated :class:`app.models.Task` with its refreshed ``updated_at``, or

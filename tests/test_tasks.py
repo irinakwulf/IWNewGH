@@ -68,6 +68,13 @@ SOON_WINDOW_DAYS = 6
 # only has to be one nothing was inserted with.
 UNKNOWN_ID = 9999
 
+# The largest id a SQLite INTEGER column can store, and the first one it cannot.
+# Werkzeug's ``<int:>`` converter accepts any run of digits, so a route can be handed
+# an id no row id could ever hold; the smaller value is in range and reaches the
+# query, which is what keeps the boundary between the two cases visible.
+SQLITE_INTEGER_MAX = 2**63 - 1
+SQLITE_INTEGER_OVERFLOW = 2**63
+
 # A deadline filter value outside the four the control offers, used to prove a
 # carried value is re-validated rather than ignored.
 UNKNOWN_DEADLINE_FILTER = "yesterday"
@@ -809,6 +816,69 @@ def test_an_unknown_task_id_is_a_404(
 
     assert response.status_code == 404
     assert "Back to the dashboard" in response.get_data(as_text=True)
+
+
+# The same requests, aimed at an id above SQLite's integer range. An id no row could
+# hold is not a task, so it answers exactly like a missing one instead of raising at
+# the statement's bind.
+OVERSIZED_TASK_REQUESTS = (
+    pytest.param("GET", f"/tasks/{SQLITE_INTEGER_OVERFLOW}", None, id="detail"),
+    pytest.param(
+        "GET", f"/tasks/{SQLITE_INTEGER_OVERFLOW}/edit", None, id="edit-form"
+    ),
+    pytest.param(
+        "POST",
+        f"/tasks/{SQLITE_INTEGER_OVERFLOW}",
+        {"title": "A task that cannot be saved"},
+        id="edit-post",
+    ),
+    pytest.param(
+        "POST",
+        f"/tasks/{SQLITE_INTEGER_OVERFLOW}/status",
+        {"status": "completed", "origin": "detail"},
+        id="status",
+    ),
+    pytest.param(
+        "POST",
+        f"/tasks/{SQLITE_INTEGER_OVERFLOW}/assign",
+        {"assignee_id": "", "origin": "detail"},
+        id="assign",
+    ),
+)
+
+
+@pytest.mark.parametrize(("method", "path", "data"), OVERSIZED_TASK_REQUESTS)
+def test_an_id_beyond_the_integer_range_is_a_404(
+    seeded_client, app, method: str, path: str, data
+) -> None:
+    """An id SQLite cannot store is a missing task, never a server error.
+
+    The route reads the task before it looks at the body, so the value reaches the
+    read: an id outside SQLite's signed 64-bit range has to be answered with the
+    same 404 an unknown id gets, because a bind would raise instead and turn the
+    request into a 500. The row count is asserted with the page, so a rejection that
+    still wrote would fail here.
+    """
+    count_before = task_count(app)
+
+    response = seeded_client.open(path, method=method, data=data or {})
+
+    assert response.status_code == 404
+    assert "Back to the dashboard" in response.get_data(as_text=True)
+    assert task_count(app) == count_before
+
+
+def test_the_largest_representable_id_still_reaches_the_lookup(
+    seeded_client,
+) -> None:
+    """The boundary inside the range is an ordinary unknown id.
+
+    It binds successfully and matches no row, which is what shows the range check
+    guards the unrepresentable values only instead of replacing the lookup.
+    """
+    response = seeded_client.get(f"/tasks/{SQLITE_INTEGER_MAX}")
+
+    assert response.status_code == 404
 
 
 def test_edit_form_is_prefilled_with_the_stored_values(seeded_client, app) -> None:

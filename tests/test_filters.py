@@ -47,6 +47,7 @@ from werkzeug.exceptions import BadRequest
 import seed
 from app import models, validation
 from app.services import members
+from app.services import tasks as task_service
 
 # The task list, which is the only screen these filters reach.
 TASKS_URL = "/tasks"
@@ -674,6 +675,20 @@ def test_an_assignee_naming_no_member_is_rejected(
     unknown = max(member_ids(app).values()) + 1
 
     _assert_rejected(seeded_client, {"assignee": str(unknown)}, {"assignee"})
+
+
+def test_the_query_refuses_a_deadline_bucket_outside_the_four(app: Flask) -> None:
+    """An unrecognised bucket raises instead of returning the unfiltered table.
+
+    The HTTP surface cannot reach this: ``parse_task_filters`` answers 400 for the
+    same value before the list is built, which the cases above assert. The guard is
+    asserted directly because its purpose is the caller that does not exist yet --
+    with no final branch an unknown bucket would append no clause and quietly widen
+    the statement into the unfiltered full-table read, the failure the status filter
+    cannot have.
+    """
+    with app.app_context(), pytest.raises(ValueError):
+        task_service.list_tasks({"deadline": "yesterday"})
 
 
 # ---------------------------------------------------------------------------
