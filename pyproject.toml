@@ -1,0 +1,30 @@
+[project]
+name = "taskboard"
+version = "0.1.0"
+description = "A simple local task-management web application for a single project."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Keeps `app` and `seed` importable from the repository root under both
+# `python -m pytest` and a bare `pytest` invocation.
+pythonpath = ["."]
+addopts = "--cov=app --cov-branch --cov-report=term-missing"
+# The 85% floor is configured once, in [tool.coverage.report] fail_under, which
+# pytest-cov applies; addopts deliberately carries no --cov-fail-under copy of it.
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+
+[tool.coverage.report]
+fail_under = 85
+# Two decimals, so the gate's exit decision compares the total it prints: at the
+# default precision of 0 a total between 84.5% and 85% is rounded up to 85 and
+# the run passes while still reporting the floor as not reached.
+precision = 2
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]

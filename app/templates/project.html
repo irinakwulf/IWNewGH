@@ -1,0 +1,140 @@
+{#
+  The project screen: the one project record, shown as a definition list and edited
+  by the single form beneath it.
+
+  Rendered by app/blueprints/project.py::view at GET|POST /project, which is the only
+  route that uses this file. Three context variables come from it, and their names are
+  the contract:
+
+    project  the stored app.models.Project, or None before the details have been
+             recorded. None is the empty state, never an error: the form below it is
+             rendered either way, and saving it is what creates the row.
+    values   the four field values the form shows -- "name", "description",
+             "start_date" and "end_date". On a GET they are the stored text; after a
+             rejected post they are what the reviewer submitted, which is why the
+             controls read `values` and never `project`, so a rejected submission comes
+             back filled in instead of blank -- except the one text a control cannot
+             hold, a date no calendar field can display, which the echo below states
+             back in its place.
+    errors   the {field: message} mapping app.validation.parse_project_form returns,
+             empty when the submission was accepted. The messages are the parser's own
+             words, rendered by the two macros imported below and never reworded here.
+
+  Dates are the one stored value not shown as-is. The definition list pipes each date
+  through the format_date filter ("26 Oct 2026"), while the two date controls take the
+  raw ISO-8601 text in their value attributes, because that is the only form an
+  <input type="date"> reads -- and a submitted text the control cannot display is
+  withheld from `value` and stated back beside the field instead, so a rejected date is
+  never lost.
+
+  Nothing here is the control for a rule. The length bounds, the date formats and the
+  rule that the end date cannot precede the start date live in app/validation.py; the
+  required, maxlength and rows attributes below are convenience only, and `novalidate`
+  on the form makes sure the parser's own messages are what a reviewer sees: an empty
+  name or an unparseable date must reach the parser and come back beside its field,
+  with the summary above the form, rather than being stopped by a browser bubble. The
+  two maxlength attributes restate no number of their own: each reads FIELD_LIMITS, the
+  vocabulary app/__init__.py publishes to every template, so the hint the browser
+  applies and the bound the parser enforces move together.
+
+  The Name field declares autocomplete="off" for the same kind of reason. Its id,
+  `name`, is a spelling the browser's autofill heuristics recognise, so a field that
+  leaves the attribute out is reported as an unresolved autofill target on every
+  render and may be offered a person's name where a project's name belongs.
+
+  The form posts to a URL built by url_for, so no target arrives from the request, and
+  it carries no anti-forgery token: the application holds no credential to forge and is
+  reachable only from loopback. It ships no script, no inline style attribute and no
+  event-handler attribute, so the submit button is the only control that writes.
+
+  Every value this file renders is autoescaped -- nothing here bypasses escaping or
+  marks anything safe -- so a project name, a description or a submitted value echoed
+  back into a field is text even when it contains markup. The classes are the ones
+  app/static/css/app.css defines, and none is invented here.
+#}
+{% extends "base.html" %}
+{% from "partials/_field_errors.html" import error_summary, field_error %}
+
+{% block title %}Project · Taskboard{% endblock %}
+
+{% block content %}
+<div class="stack">
+  <h1>Project</h1>
+  {% if project %}
+  <dl>
+    <dt>Name</dt>
+    <dd>{{ project.name }}</dd>
+    <dt>Description</dt>
+    <dd>{{ project.description }}</dd>
+    <dt>Start date</dt>
+    <dd>{{ project.start_date|format_date }}</dd>
+    <dt>End date</dt>
+    <dd>{{ project.end_date|format_date }}</dd>
+  </dl>
+  {% else %}
+  {# A section of this screen rather than a page heading, so it is an h2 beneath the
+     h1 above: the outline runs h1 then h2 with no skipped level, which is also the
+     level the task list's empty states use. #}
+  <div class="empty-state">
+    <h2>No project details yet.</h2>
+    <p>Record the project's name, description, start date and end date with the form below.</p>
+  </div>
+  {% endif %}
+  {{ error_summary(errors) }}
+  <form method="post" action="{{ url_for('project.view') }}" novalidate aria-label="Project details">
+    <div class="stack">
+      <div>
+        <label for="name">Name</label>
+        <input class="input" type="text" id="name" name="name" value="{{ values.name }}" autocomplete="off" maxlength="{{ FIELD_LIMITS.project_name }}" required{% if errors and errors.name %} aria-invalid="true" aria-describedby="name-error"{% endif %}>
+        {{ field_error(errors, 'name') }}
+      </div>
+      <div>
+        <label for="description">Description</label>
+        <textarea class="textarea" id="description" name="description" rows="4" maxlength="{{ FIELD_LIMITS.description }}"{% if errors and errors.description %} aria-invalid="true" aria-describedby="description-error"{% endif %}>{{ values.description }}</textarea>
+        {{ field_error(errors, 'description') }}
+      </div>
+      <div class="stack">
+        <div>
+          <label for="start_date">Start date</label>
+          {# A date input shows a full YYYY-MM-DD date and nothing else: handed any
+             other text it renders empty, so a rejected entry would be lost from the
+             one control that cannot hold it. `start_date_submitted` is the text the
+             reviewer sent and `start_date_unshowable` is true exactly when that text
+             is one the field cannot show, which is the case the echo below states
+             back beside the field. The value attribute is withheld for that text: a
+             date input is required to ignore a value it cannot display, so writing
+             it there would put an invalid value in the document and show nothing. #}
+          {% set start_date_submitted = values.start_date|default('', true) %}
+          {% set start_date_unshowable = start_date_submitted and (not start_date_submitted|format_date or start_date_submitted|length != 10 or start_date_submitted[4] != '-' or start_date_submitted[7] != '-') %}
+          <input class="input" type="date" id="start_date" name="start_date" value="{% if not start_date_unshowable %}{{ start_date_submitted }}{% endif %}" required aria-describedby="{% if errors and errors.start_date %}start_date-error {% endif %}{% if start_date_unshowable %}start_date-submitted {% endif %}start_date-hint"{% if errors and errors.start_date %} aria-invalid="true"{% endif %}>
+          {{ field_error(errors, 'start_date') }}
+          {% if start_date_unshowable %}
+          <p id="start_date-submitted">You entered &ldquo;{{ start_date_submitted }}&rdquo;. This field shows a calendar date only, so the date must be entered again.</p>
+          {% endif %}
+        </div>
+        <p id="start_date-hint">Pick a date with the calendar button, or type it in the order the field's segments show.</p>
+      </div>
+      <div class="stack">
+        <div>
+          <label for="end_date">End date</label>
+          {# The end date is treated exactly as the start date above: the same
+             condition decides whether the control can show the submitted text, the
+             value attribute is withheld for it when it cannot, and the echo states
+             the entry back. #}
+          {% set end_date_submitted = values.end_date|default('', true) %}
+          {% set end_date_unshowable = end_date_submitted and (not end_date_submitted|format_date or end_date_submitted|length != 10 or end_date_submitted[4] != '-' or end_date_submitted[7] != '-') %}
+          <input class="input" type="date" id="end_date" name="end_date" value="{% if not end_date_unshowable %}{{ end_date_submitted }}{% endif %}" required aria-describedby="{% if errors and errors.end_date %}end_date-error {% endif %}{% if end_date_unshowable %}end_date-submitted {% endif %}end_date-hint"{% if errors and errors.end_date %} aria-invalid="true"{% endif %}>
+          {{ field_error(errors, 'end_date') }}
+          {% if end_date_unshowable %}
+          <p id="end_date-submitted">You entered &ldquo;{{ end_date_submitted }}&rdquo;. This field shows a calendar date only, so the date must be entered again.</p>
+          {% endif %}
+        </div>
+        <p id="end_date-hint">Pick a date with the calendar button, or type it in the order the field's segments show.</p>
+      </div>
+      <div>
+        <button type="submit" class="button button--primary">Save project details</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}
